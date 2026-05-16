@@ -1,0 +1,45 @@
+# Centralised configuration for the Pearls AQI Predictor
+city:
+  name: "Hyderabad, Sindh, Pakistan"
+  latitude: 25.3924
+  longitude: 68.3737
+  timezone: "Asia/Karachi"
+
+openweather:
+  base_url: "https://api.openweathermap.org/data/2.5"
+  history_url: "https://api.openweathermap.org/data/2.5/air_pollution/history"
+  forecast_url: "https://api.openweathermap.org/data/2.5/air_pollution/forecast"
+  current_url: "https://api.openweathermap.org/data/2.5/air_pollution"
+  request_timeout_s: 20
+  max_retries: 4
+  backoff_base_s: 1.5
+
+backfill:
+  days: 30                    # how much history to pull on first run
+  chunk_hours: 168            # 1 week per API call
+
+features:
+  rolling_windows_hours: [3, 6, 12, 24]
+  target_horizon_hours: 72    # predict next 3 days
+  pollutants: ["pm2_5", "pm10", "no2", "so2", "o3", "co", "nh3", "no"]
+
+hopsworks:
+  host: "localhost"
+  project: "local_project"
+  api_key_value: "offline"
+  feature_group_name: "aqi_features"
+  feature_group_version: 1
+  model_registry_name: "aqi_champion"
+  fallback_to_parquet: true
+  parquet_dir: ".local_fs"
+
+training:
+  test_size: 0.2
+  random_state: 42
+  lstm:
+    sequence_length: 24
+    epochs: 15
+    batch_size: 32
+
+dashboard:
+  hazardous_aqi_threshold: 4   # OpenWeather AQI is 1..5; 4=poor, 5=very poor

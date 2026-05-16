@@ -1,0 +1,42 @@
+name: Training Pipeline (daily)
+
+on:
+  schedule:
+    - cron: "0 2 * * *"      # every day at 02:00 UTC
+  workflow_dispatch:
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    env:
+      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+      HOPSWORKS_HOST: localhost
+      HOPSWORKS_PROJECT: local_project
+      HOPSWORKS_API_KEY: offline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Download latest feature store
+        uses: actions/download-artifact@v4
+        with:
+          name: local-feature-store
+          path: .local_fs/
+        continue-on-error: true
+      - name: Train + benchmark models
+        run: python -m training.train
+      - name: Generate SHAP explainability
+        run: python -m training.evaluate
+      - name: Upload model + artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            models/
+            artifacts/
