@@ -1,4 +1,16 @@
 # Centralised configuration for the Pearls AQI Predictor
+#
+# Architecture (decoupled local — Hopsworks Cloud registration unavailable):
+#   OpenWeather API → feature engineering → Parquet feature store (.local_fs/)
+#   Training → local model registry (models/ + artifacts/)
+#   FastAPI backend (app/main.py) + Streamlit frontend (app/dashboard.py)
+architecture:
+  mode: decoupled_local
+  feature_store_primary: parquet
+  inference_api: fastapi
+  dashboard: streamlit
+  hopsworks_optional: true
+
 city:
   name: "Hyderabad, Sindh, Pakistan"
   latitude: 25.3924

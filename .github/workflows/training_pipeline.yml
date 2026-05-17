@@ -9,10 +9,10 @@ jobs:
   train:
     runs-on: ubuntu-latest
     env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      FEATURE_STORE_MODE: parquet
       OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-      HOPSWORKS_HOST: localhost
-      HOPSWORKS_PROJECT: local_project
-      HOPSWORKS_API_KEY: offline
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +29,11 @@ jobs:
           name: local-feature-store
           path: .local_fs/
         continue-on-error: true
+      - name: Seed feature store if missing
+        run: |
+          if [ ! -f .local_fs/aqi_features.parquet ]; then
+            python -m features.backfill_historical
+          fi
       - name: Train + benchmark models
         run: python -m training.train
       - name: Generate SHAP explainability

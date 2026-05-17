@@ -1,5 +1,6 @@
 # Local AI context tracker — never commit
 project_tracker.md
+_pdf_extract.txt
 
 # Secrets — never commit
 .env

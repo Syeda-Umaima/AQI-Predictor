@@ -88,7 +88,7 @@ elif page == "EDA & Thought Process":
         st.subheader("Pollutant correlation heatmap")
         st.image(str(heatmap))
     else:
-        st.info("Run `python data/eda_notebook_scaffold.py` to generate EDA artefacts.")
+        st.info("Run `python -m data.eda_notebook_scaffold` to generate EDA artefacts.")
 
     for title, file in [
         ("Diurnal AQI cycle", "hourly_seasonality.html"),

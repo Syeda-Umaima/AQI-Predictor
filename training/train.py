@@ -22,6 +22,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
+from features.feature_store import load_features
+
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "config.yaml"
@@ -40,22 +42,7 @@ def _cfg() -> dict:
 
 # ---------------------------------------------------------------- Data layer
 def load_training_frame() -> pd.DataFrame:
-    cfg = _cfg()["hopsworks"]
-    try:
-        import hopsworks  # type: ignore
-        project = hopsworks.login(host=cfg["host"], project=cfg["project"],
-                                  api_key_value=cfg["api_key_value"])
-        fs = project.get_feature_store()
-        fg = fs.get_feature_group(cfg["feature_group_name"], version=cfg["feature_group_version"])
-        return fg.read()
-    except Exception as e:
-        logger.warning("Hopsworks unavailable (%s) — reading Parquet fallback.", e)
-        path = Path(cfg["parquet_dir"]) / f"{cfg['feature_group_name']}.parquet"
-        if not path.exists():
-            raise FileNotFoundError(
-                "No feature data found. Run `python -m features.backfill_historical` first."
-            ) from e
-        return pd.read_parquet(path)
+    return load_features()
 
 
 def time_ordered_split(df: pd.DataFrame, test_size: float):
@@ -155,7 +142,9 @@ def promote_champion(leaderboard: dict, X_test_cols: list[str]) -> str:
         "feature_columns": X_test_cols,
         "leaderboard": {k: v["metrics"] for k, v in leaderboard.items()},
     }
-    (ARTIFACTS / "leaderboard.json").write_text(json.dumps(meta, indent=2))
+    (ARTIFACTS / "leaderboard.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
 
     # Best-effort push to local Hopsworks Model Registry
     try:

@@ -19,13 +19,9 @@ ARTIFACTS.mkdir(exist_ok=True)
 
 
 def load_features() -> pd.DataFrame:
-    """Load the engineered feature frame from the local Parquet store."""
-    candidate = Path(".local_fs/aqi_features.parquet")
-    if not candidate.exists():
-        raise FileNotFoundError(
-            "Run `python -m features.backfill_historical` first to populate the store."
-        )
-    return pd.read_parquet(candidate)
+    """Load the engineered feature frame from the local feature store."""
+    from features.feature_store import load_features as _load
+    return _load()
 
 
 # --------------------------------------------------------------------- Plots

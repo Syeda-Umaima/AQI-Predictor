@@ -28,7 +28,7 @@ app = FastAPI(title="Pearls AQI Predictor", version="1.0.0")
 
 
 def _load_champion():
-    meta = json.loads((ARTIFACTS / "leaderboard.json").read_text())
+    meta = json.loads((ARTIFACTS / "leaderboard.json").read_text(encoding="utf-8"))
     if meta["champion"] == "lstm":
         from tensorflow.keras.models import load_model  # type: ignore
         return meta, load_model(MODELS_DIR / "champion_lstm.keras"), joblib.load(MODELS_DIR / "champion_scaler.joblib")

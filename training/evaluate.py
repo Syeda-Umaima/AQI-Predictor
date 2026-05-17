@@ -28,7 +28,7 @@ ARTIFACTS.mkdir(exist_ok=True)
 
 
 def load_champion():
-    meta = json.loads((ARTIFACTS / "leaderboard.json").read_text())
+    meta = json.loads((ARTIFACTS / "leaderboard.json").read_text(encoding="utf-8"))
     name = meta["champion"]
     if name == "lstm":
         from tensorflow.keras.models import load_model  # type: ignore
@@ -108,7 +108,9 @@ def run_lime(
     plt.close()
 
     weights = {feat: float(weight) for feat, weight in explanation.as_list()}
-    (ARTIFACTS / "lime_weights.json").write_text(json.dumps(weights, indent=2))
+    (ARTIFACTS / "lime_weights.json").write_text(
+        json.dumps(weights, indent=2), encoding="utf-8"
+    )
     logger.info("Wrote LIME artefacts to %s/", ARTIFACTS)
 
 
