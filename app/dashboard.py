@@ -18,7 +18,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
-CONFIG = yaml.safe_load((ROOT / "config" / "config.yaml").read_text())
+CONFIG = yaml.safe_load((ROOT / "config" / "config.yaml").read_text(encoding="utf-8"))
 
 AQI_LABELS = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}
 AQI_COLORS = {1: "#22c55e", 2: "#84cc16", 3: "#eab308", 4: "#f97316", 5: "#ef4444"}
@@ -41,7 +41,7 @@ def _load_forecast():
         r.raise_for_status()
         return r.json()
     except Exception:
-        ts = pd.date_range(pd.Timestamp.utcnow(), periods=72, freq="h")
+        ts = pd.date_range(pd.Timestamp.now("UTC"), periods=72, freq="h")
         return {
             "champion": "demo",
             "forecast": [{"timestamp": str(t), "predicted_aqi": 2 + (i % 4) * 0.5}
@@ -72,7 +72,7 @@ if page == "Real-Time Forecast":
     fig = px.line(df, x="timestamp", y="predicted_aqi", markers=True,
                   title="Predicted AQI — next 72 hours")
     fig.update_layout(template="plotly_white", height=420)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # ============================================================ PAGE 2
 elif page == "EDA & Thought Process":
@@ -99,7 +99,7 @@ elif page == "EDA & Thought Process":
         path = ARTIFACTS / file
         if path.exists():
             st.subheader(title)
-            st.components.v1.html(path.read_text(), height=480, scrolling=True)
+            st.components.v1.html(path.read_text(encoding="utf-8"), height=480, scrolling=True)
 
 # ============================================================ PAGE 3
 else:
@@ -109,9 +109,9 @@ else:
     if not lb_path.exists():
         st.warning("Train the models first: `python -m training.train`.")
     else:
-        meta = json.loads(lb_path.read_text())
+        meta = json.loads(lb_path.read_text(encoding="utf-8"))
         st.subheader("Benchmark leaderboard")
-        st.dataframe(pd.DataFrame(meta["leaderboard"]).T.round(4), use_container_width=True)
+        st.dataframe(pd.DataFrame(meta["leaderboard"]).T.round(4), width="stretch")
         st.success(f"Champion model: **{meta['champion']}**")
 
     st.subheader("SHAP — global feature importance")
@@ -131,13 +131,13 @@ else:
     if lime_plot.exists():
         st.image(str(lime_plot), caption="LIME local explanation (single forecast row)")
     if lime_json.exists():
-        lime_weights = json.loads(lime_json.read_text())
+        lime_weights = json.loads(lime_json.read_text(encoding="utf-8"))
         st.markdown("**Top local feature contributions**")
         st.dataframe(
             pd.DataFrame(
                 [{"feature": k, "weight": v} for k, v in lime_weights.items()]
             ).sort_values("weight", key=abs, ascending=False),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     elif not lime_plot.exists():
