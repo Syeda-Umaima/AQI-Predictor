@@ -2,7 +2,7 @@ name: Feature Pipeline (hourly)
 
 on:
   schedule:
-    - cron: "0 * * * *"      # every hour, on the hour
+    - cron: "0 * * * *" # every hour, on the hour
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run hourly feature ingestion
-        run: python -m features.ingest_hourly || echo "Ingestion failed, but continuing to keep CI green."
+        run: python -m features.ingest_hourly
       - name: Upload local feature store snapshot
         uses: actions/upload-artifact@v4
         with:
