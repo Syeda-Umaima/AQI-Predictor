@@ -1,48 +1,79 @@
-# Centralised configuration for the Pearls AQI Predictor
-#
-# Architecture (decoupled local — Hopsworks Cloud registration unavailable):
-#   OpenWeather API → feature engineering → Parquet feature store (.local_fs/)
-#   Training → local model registry (models/ + artifacts/)
-#   FastAPI backend (app/main.py) + Streamlit frontend (app/dashboard.py)
-architecture:
-  mode: decoupled_local
-  feature_store_primary: parquet
-  inference_api: fastapi
-  dashboard: streamlit
-  hopsworks_optional: true
-
 city:
   name: "Hyderabad, Sindh, Pakistan"
   latitude: 25.3924
   longitude: 68.3737
   timezone: "Asia/Karachi"
 
-openweather:
-  base_url: "https://api.openweathermap.org/data/2.5"
-  history_url: "https://api.openweathermap.org/data/2.5/air_pollution/history"
-  forecast_url: "https://api.openweathermap.org/data/2.5/air_pollution/forecast"
-  current_url: "https://api.openweathermap.org/data/2.5/air_pollution"
-  request_timeout_s: 20
+open_meteo:
+  weather_url: "https://api.open-meteo.com/v1/forecast"
+  weather_archive_url: "https://archive-api.open-meteo.com/v1/archive"
+  air_quality_url: "https://air-quality-api.open-meteo.com/v1/air-quality"
+  request_timeout_s: 30
   max_retries: 4
   backoff_base_s: 1.5
+  weather_hourly_vars:
+    - temperature_2m
+    - relative_humidity_2m
+    - apparent_temperature
+    - wind_speed_10m
+    - wind_direction_10m
+    - surface_pressure
+    - precipitation
+    - cloud_cover
+    - visibility
+  air_quality_hourly_vars:
+    - pm2_5
+    - pm10
+    - carbon_monoxide
+    - nitrogen_dioxide
+    - sulphur_dioxide
+    - ozone
+    - dust
+    - us_aqi
 
 backfill:
-  days: 30                    # how much history to pull on first run
-  chunk_hours: 168            # 1 week per API call
+  days: 30
+  chunk_days: 7
 
 features:
+  pollutants:
+    - pm2_5
+    - pm10
+    - carbon_monoxide
+    - nitrogen_dioxide
+    - sulphur_dioxide
+    - ozone
+    - dust
+  weather_vars:
+    - temperature_2m
+    - relative_humidity_2m
+    - apparent_temperature
+    - wind_speed_10m
+    - surface_pressure
+  lag_vars:
+    - pm2_5
+    - pm10
+    - nitrogen_dioxide
+    - temperature_2m
+    - relative_humidity_2m
+    - us_aqi
+  lag_hours: [1, 2, 3, 24, 48]
   rolling_windows_hours: [3, 6, 12, 24]
-  target_horizon_hours: 72    # predict next 3 days
-  pollutants: ["pm2_5", "pm10", "no2", "so2", "o3", "co", "nh3", "no"]
+  rolling_stats: [mean, std, min, max]
+  rolling_vars:
+    - pm2_5
+    - pm10
+    - nitrogen_dioxide
+    - temperature_2m
+    - relative_humidity_2m
+    - us_aqi
+  target_horizon_hours: 72
 
 hopsworks:
-  host: "localhost"
-  project: "local_project"
-  api_key_value: "offline"
-  feature_group_name: "aqi_features"
+  project: "AQI_Predictor_Hyderabad"
+  feature_group_name: "aqi_features_v2"
   feature_group_version: 1
   model_registry_name: "aqi_champion"
-  fallback_to_parquet: true
   parquet_dir: ".local_fs"
 
 training:
@@ -50,8 +81,8 @@ training:
   random_state: 42
   lstm:
     sequence_length: 24
-    epochs: 15
+    epochs: 20
     batch_size: 32
 
 dashboard:
-  hazardous_aqi_threshold: 4   # OpenWeather AQI is 1..5; 4=poor, 5=very poor
+  hazardous_aqi_threshold: 150

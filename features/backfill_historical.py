@@ -1,21 +1,22 @@
 """
-Backfill ~30 days of historical AQI into the local Feature Store.
+Historical backfill pipeline.
 
-Tries OpenWeather history first. On free-tier 401/403 or empty responses,
-falls back to realistic synthetic data for the configured city (Hyderabad).
+Fetches 30 days of merged Open-Meteo weather + air quality data for
+Hyderabad, Pakistan, runs the full feature engineering pipeline, and
+provisions the Hopsworks Feature Group (or Parquet fallback) with the result.
+
+Falls back to realistic synthetic data if Open-Meteo is unreachable.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
-import requests
 import yaml
 
-from features.api_client import OpenWeatherClient
-from features.feature_engineering import build_feature_frame
+from features.api_client import OpenMeteoClient
+from features.feature_engineering import build_feature_frame, count_feature_columns
 from features.feature_store import push_to_store
 from features.synthetic_data import generate_synthetic_raw
 
@@ -28,74 +29,55 @@ def _cfg() -> dict:
         return yaml.safe_load(f)
 
 
-def _is_history_unavailable(exc: Exception) -> bool:
-    if isinstance(exc, requests.HTTPError) and exc.response is not None:
-        return exc.response.status_code in (401, 403, 404, 429)
-    msg = str(exc).lower()
-    return any(k in msg for k in ("401", "403", "unauthorized", "subscription"))
-
-
-def fetch_history_from_api(client: OpenWeatherClient) -> pd.DataFrame | None:
-    """Return concatenated raw history, or None if history API is unusable."""
+def fetch_historical_raw() -> pd.DataFrame | None:
+    """Attempt to fetch combined historical data from Open-Meteo."""
     cfg = _cfg()
-    end = datetime.now(tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=cfg["backfill"]["days"])
-    chunk = timedelta(hours=cfg["backfill"]["chunk_hours"])
-
-    all_chunks: list[pd.DataFrame] = []
-    cursor = start
-    while cursor < end:
-        chunk_end = min(cursor + chunk, end)
-        logger.info("Fetching history %s → %s", cursor.isoformat(), chunk_end.isoformat())
-        try:
-            df = client.fetch_history(int(cursor.timestamp()), int(chunk_end.timestamp()))
-        except Exception as e:
-            if _is_history_unavailable(e):
-                logger.warning(
-                    "OpenWeather history API unavailable on free tier (%s). "
-                    "Will use synthetic fallback.",
-                    e,
-                )
-                return None
-            raise
-        if not df.empty:
-            all_chunks.append(df)
-        cursor = chunk_end
-
-    if not all_chunks:
+    days = cfg["backfill"]["days"]
+    try:
+        client = OpenMeteoClient()
+        df = client.fetch_combined_historical(days=days)
+        if df.empty:
+            logger.warning("Open-Meteo returned empty historical data.")
+            return None
+        logger.info("Fetched %d raw hourly rows from Open-Meteo (%d days).", len(df), days)
+        return df
+    except Exception as exc:
+        logger.warning("Open-Meteo historical fetch failed: %s", exc)
         return None
-    return pd.concat(all_chunks).drop_duplicates("timestamp").sort_values("timestamp")
 
 
 def run_backfill() -> pd.DataFrame:
-    cfg = _cfg()
-    city = cfg["city"]["name"]
-    raw: pd.DataFrame | None = None
-
-    try:
-        client = OpenWeatherClient.from_env()
-        raw = fetch_history_from_api(client)
-    except RuntimeError as e:
-        logger.warning("Could not initialise OpenWeather client (%s). Using synthetic data.", e)
-    except Exception as e:
-        if _is_history_unavailable(e):
-            logger.warning("History fetch failed (%s). Using synthetic data.", e)
-        else:
-            raise
+    """
+    Full backfill:
+      1. Fetch raw history from Open-Meteo (or generate synthetic fallback).
+      2. Run feature engineering.
+      3. Push to Hopsworks Feature Group (or Parquet fallback).
+    """
+    raw = fetch_historical_raw()
 
     if raw is None or raw.empty:
         logger.warning(
-            "No historical rows from OpenWeather for %s — generating synthetic training data.",
-            city,
+            "No historical data from Open-Meteo — generating synthetic training data."
         )
-        raw = generate_synthetic_raw()
+        cfg = _cfg()
+        raw = generate_synthetic_raw(days=cfg["backfill"]["days"])
 
     features = build_feature_frame(raw)
+    if features.empty:
+        raise RuntimeError("Feature engineering produced an empty DataFrame after backfill.")
+
+    n_feat_cols = count_feature_columns(features)
+    logger.info(
+        "Backfill engineered %d rows × %d feature columns.",
+        len(features), n_feat_cols,
+    )
+
     push_to_store(features)
-    logger.info("Backfill complete: %d engineered rows for %s.", len(features), city)
+    logger.info("Backfill complete.")
     return features
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run_backfill()
+    df = run_backfill()
+    print(f"\nBackfill complete: {len(df)} rows, {df.shape[1]} columns.")

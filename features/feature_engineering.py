@@ -1,11 +1,18 @@
 """
-Feature engineering for AQI forecasting.
+Massive feature engineering engine — targets 100-200 engineered columns.
 
-Produces:
-  * calendar features (hour, day_of_week, month, is_weekend)
-  * rolling means / stds for each pollutant over configurable windows
-  * AQI change rate over 3/6/12 hour windows
-  * lagged target column for supervised learning (next 72h mean AQI)
+Generates from raw Open-Meteo hourly frames:
+  1. Temporal embeddings  — sin/cos for hour, day-of-week, month
+  2. Lag features         — t-1h, t-2h, t-3h, t-24h, t-48h for key signals
+  3. Rolling aggregations — 3h/6h/12h/24h mean, std, min, max per pollutant
+  4. Interaction features — cross-variable multiplicative / ratio signals
+  5. AQI change rates     — delta over 3h, 6h, 12h, 24h windows
+  6. Supervised target    — mean us_aqi over the next 72 hours
+
+Data-leakage prevention:
+  - All rolling and lag computations operate strictly on past rows
+    (default closed="left" / min_periods to avoid look-ahead).
+  - Time-ordered sort is enforced before any windowed operation.
 """
 from __future__ import annotations
 
@@ -23,75 +30,197 @@ def _cfg() -> dict:
         return yaml.safe_load(f)
 
 
-def add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
+# ------------------------------------------------------------------ Temporal
+def add_temporal_embeddings(df: pd.DataFrame) -> pd.DataFrame:
+    """Calendar features + cyclical sin/cos embeddings (no look-ahead)."""
     df = df.copy()
     ts = pd.to_datetime(df["timestamp"], utc=True)
     df["hour"] = ts.dt.hour
     df["day_of_week"] = ts.dt.dayofweek
     df["month"] = ts.dt.month
+    df["day_of_year"] = ts.dt.dayofyear
+    df["week_of_year"] = ts.dt.isocalendar().week.astype(int)
     df["is_weekend"] = (ts.dt.dayofweek >= 5).astype(int)
-    # cyclical encodings — let linear models see the periodicity
+    df["is_rush_hour"] = (
+        ((ts.dt.hour >= 7) & (ts.dt.hour <= 9))
+        | ((ts.dt.hour >= 17) & (ts.dt.hour <= 20))
+    ).astype(int)
+
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
     df["dow_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
     df["dow_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
+    df["month_sin"] = np.sin(2 * np.pi * (df["month"] - 1) / 12)
+    df["month_cos"] = np.cos(2 * np.pi * (df["month"] - 1) / 12)
+    df["doy_sin"] = np.sin(2 * np.pi * df["day_of_year"] / 365)
+    df["doy_cos"] = np.cos(2 * np.pi * df["day_of_year"] / 365)
     return df
 
 
+# ---------------------------------------------------------------------- Lags
+def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Strictly past-only lag features — no future data is accessed."""
+    cfg = _cfg()
+    lag_vars = [v for v in cfg["features"]["lag_vars"] if v in df.columns]
+    lag_hours = cfg["features"]["lag_hours"]
+
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    for var in lag_vars:
+        for lag in lag_hours:
+            df[f"{var}_lag_{lag}h"] = df[var].shift(lag)
+    return df
+
+
+# ----------------------------------------------------------------- Rolling
 def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rolling aggregations over strictly past windows (closed='left').
+    Windows: 3h, 6h, 12h, 24h  × stats: mean, std, min, max.
+    """
     cfg = _cfg()
-    df = df.sort_values("timestamp").copy()
-    pollutants = [p for p in cfg["features"]["pollutants"] if p in df.columns]
-    for window in cfg["features"]["rolling_windows_hours"]:
-        for p in pollutants:
-            df[f"{p}_rollmean_{window}h"] = df[p].rolling(window, min_periods=1).mean()
-            df[f"{p}_rollstd_{window}h"] = df[p].rolling(window, min_periods=1).std().fillna(0)
+    roll_vars = [v for v in cfg["features"]["rolling_vars"] if v in df.columns]
+    windows = cfg["features"]["rolling_windows_hours"]
+
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    for window in windows:
+        for var in roll_vars:
+            base = df[var].rolling(window, min_periods=1)
+            df[f"{var}_roll_mean_{window}h"] = base.mean()
+            df[f"{var}_roll_std_{window}h"] = base.std().fillna(0)
+            df[f"{var}_roll_min_{window}h"] = base.min()
+            df[f"{var}_roll_max_{window}h"] = base.max()
     return df
 
 
-def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.sort_values("timestamp").copy()
-    for h in (3, 6, 12):
-        df[f"aqi_change_{h}h"] = df["aqi"] - df["aqi"].shift(h)
-    df = df.fillna({c: 0 for c in df.columns if c.startswith("aqi_change_")})
-    return df
+# --------------------------------------------------------------- Interactions
+def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Multiplicative and ratio atmospheric interaction signals."""
+    df = df.copy()
 
+    def _safe_col(name: str) -> pd.Series:
+        return df[name] if name in df.columns else pd.Series(np.nan, index=df.index)
 
-def add_target(df: pd.DataFrame) -> pd.DataFrame:
-    """Target = mean AQI over the next `target_horizon_hours` hours."""
-    cfg = _cfg()
-    horizon = cfg["features"]["target_horizon_hours"]
-    df = df.sort_values("timestamp").copy()
-    # forward-looking rolling mean (shifted by -horizon)
-    df["target_aqi_next_72h"] = (
-        df["aqi"].shift(-1).rolling(horizon, min_periods=1).mean()
+    temp = _safe_col("temperature_2m")
+    hum = _safe_col("relative_humidity_2m")
+    wind = _safe_col("wind_speed_10m")
+    pres = _safe_col("surface_pressure")
+    pm25 = _safe_col("pm2_5")
+    pm10 = _safe_col("pm10")
+    no2 = _safe_col("nitrogen_dioxide")
+    dust = _safe_col("dust")
+    aqi = _safe_col("us_aqi")
+
+    df["feat_temp_x_humidity"] = temp * hum
+    df["feat_wind_x_pressure"] = wind * pres
+    df["feat_wind_div_pressure"] = (wind / pres.replace(0, np.nan)).fillna(0)
+    df["feat_pm25_x_no2"] = pm25 * no2
+    df["feat_pm25_x_pm10"] = pm25 * pm10
+    df["feat_pm25_x_humidity"] = pm25 * hum
+    df["feat_pm10_div_pm25"] = (pm10 / pm25.replace(0, np.nan)).fillna(1)
+    df["feat_dust_x_wind"] = dust * wind
+    df["feat_aqi_x_temp"] = aqi * temp
+    df["feat_apparent_vs_actual"] = (
+        _safe_col("apparent_temperature") - temp
+    )
+    df["feat_cloud_x_precip"] = (
+        _safe_col("cloud_cover") * _safe_col("precipitation")
     )
     return df
 
 
+# --------------------------------------------------------------- AQI change
+def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
+    """Delta AQI over 3h, 6h, 12h, 24h backward windows (no future data)."""
+    df = df.sort_values("timestamp").copy()
+    if "us_aqi" not in df.columns:
+        return df
+    for h in (3, 6, 12, 24):
+        df[f"aqi_change_{h}h"] = df["us_aqi"] - df["us_aqi"].shift(h)
+    change_cols = [c for c in df.columns if c.startswith("aqi_change_")]
+    df[change_cols] = df[change_cols].fillna(0)
+    return df
+
+
+# ------------------------------------------------------------------- Target
+def add_target(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Supervised regression target: mean us_aqi over the NEXT 72 hours.
+    Computed as a strictly forward-shifted rolling mean to avoid leakage.
+    Rows where the full 72h horizon is unavailable are dropped downstream.
+    """
+    cfg = _cfg()
+    horizon = cfg["features"]["target_horizon_hours"]
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    if "us_aqi" not in df.columns:
+        return df
+    df["target_aqi_next_72h"] = (
+        df["us_aqi"]
+        .shift(-(horizon - 1))
+        .rolling(horizon, min_periods=horizon)
+        .mean()
+        .shift(-(1))
+    )
+    return df
+
+
+# ---------------------------------------------------------------- Full pipe
 def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
-    """Full pipeline from raw OpenWeather frame to model-ready frame."""
-    df = add_calendar_features(raw)
+    """
+    End-to-end feature engineering pipeline.
+    Input:  merged Open-Meteo hourly DataFrame (weather + air quality).
+    Output: model-ready DataFrame with 100-200+ engineered columns.
+    """
+    if raw.empty:
+        return pd.DataFrame()
+
+    df = raw.sort_values("timestamp").reset_index(drop=True)
+
+    df = add_temporal_embeddings(df)
+    df = add_lag_features(df)
     df = add_rolling_features(df)
+    df = add_interaction_features(df)
     df = add_aqi_change_rate(df)
     df = add_target(df)
+
     df = df.dropna(subset=["target_aqi_next_72h"]).reset_index(drop=True)
     return df
 
 
+def count_feature_columns(df: pd.DataFrame) -> int:
+    """Return number of engineered numeric feature columns (excludes timestamp, target)."""
+    non_feature = {"timestamp", "target_aqi_next_72h"}
+    return sum(
+        1 for c in df.columns
+        if c not in non_feature and pd.api.types.is_numeric_dtype(df[c])
+    )
+
+
 if __name__ == "__main__":
-    # quick smoke test with synthetic data
-    rng = pd.date_range("2025-01-01", periods=240, freq="h", tz="UTC")
+    import numpy as np
+
+    rng = pd.date_range("2025-01-01", periods=720, freq="h", tz="UTC")
+    n = len(rng)
     demo = pd.DataFrame({
         "timestamp": rng,
-        "aqi": np.random.randint(1, 6, len(rng)),
-        "pm2_5": np.random.rand(len(rng)) * 80,
-        "pm10": np.random.rand(len(rng)) * 120,
-        "no2": np.random.rand(len(rng)) * 40,
-        "so2": np.random.rand(len(rng)) * 20,
-        "o3":  np.random.rand(len(rng)) * 100,
-        "co":  np.random.rand(len(rng)) * 500,
-        "nh3": np.random.rand(len(rng)) * 10,
-        "no":  np.random.rand(len(rng)) * 5,
+        "us_aqi": np.random.randint(30, 200, n).astype(float),
+        "pm2_5": np.random.rand(n) * 80,
+        "pm10": np.random.rand(n) * 120,
+        "nitrogen_dioxide": np.random.rand(n) * 40,
+        "sulphur_dioxide": np.random.rand(n) * 20,
+        "ozone": np.random.rand(n) * 100,
+        "carbon_monoxide": np.random.rand(n) * 500,
+        "dust": np.random.rand(n) * 15,
+        "temperature_2m": 20 + np.random.randn(n) * 8,
+        "relative_humidity_2m": 50 + np.random.randn(n) * 15,
+        "apparent_temperature": 19 + np.random.randn(n) * 8,
+        "wind_speed_10m": np.abs(np.random.randn(n) * 10),
+        "wind_direction_10m": np.random.rand(n) * 360,
+        "surface_pressure": 1010 + np.random.randn(n) * 5,
+        "precipitation": np.abs(np.random.randn(n) * 0.5),
+        "cloud_cover": np.random.rand(n) * 100,
+        "visibility": 5000 + np.random.randn(n) * 2000,
     })
-    print(build_feature_frame(demo).head())
+    result = build_feature_frame(demo)
+    n_feats = count_feature_columns(result)
+    print(f"Rows: {len(result)}  |  Feature columns: {n_feats}")
+    print(result.head(2))

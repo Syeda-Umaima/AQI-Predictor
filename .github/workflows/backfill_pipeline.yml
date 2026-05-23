@@ -1,7 +1,12 @@
-name: Backfill Pipeline (manual)
+name: Backfill Historical Data (manual / on-demand)
 
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to backfill (default: 30)"
+        required: false
+        default: "30"
 
 jobs:
   backfill:
@@ -9,22 +14,29 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      FEATURE_STORE_MODE: parquet
-      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install deps
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Backfill historical features (API or synthetic fallback)
+
+      - name: Run historical backfill (Open-Meteo → Feature Store)
         run: python -m features.backfill_historical
-      - name: Upload local feature store snapshot
+
+      - name: Upload local feature store snapshot (Parquet fallback)
+        if: env.HOPSWORKS_API_KEY == ''
         uses: actions/upload-artifact@v4
         with:
           name: local-feature-store
           path: .local_fs/
+          retention-days: 30
