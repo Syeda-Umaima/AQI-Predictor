@@ -105,7 +105,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             print(f"DataFrame shape being pushed: {df.shape}")
             print(f"Sample data: \n{df.head(2)}")
             # --- End verbose debug logs ---
-            fg.insert(df, write_options={"wait_for_job": True})
+            fg.insert(df, write_options={"wait_for_job": False})
             logger.info(
                 "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
                 cfg["feature_group_name"], cfg["feature_group_version"], len(df),
