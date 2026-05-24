@@ -216,7 +216,7 @@ if page == "Real-Time Forecast":
     st.subheader("Forecast Detail Table")
     display_df = df.rename(columns={"timestamp": "Timestamp (UTC)", "predicted_aqi": "Predicted AQI"})
     display_df["Category"] = display_df["Predicted AQI"].apply(lambda v: _aqi_label_color(v)[0])
-    st.dataframe(display_df.set_index("Timestamp (UTC)"), width="stretch")
+    st.dataframe(display_df.set_index("Timestamp (UTC)"))
 
 
 # ============================================================= PAGE 2
@@ -266,10 +266,7 @@ elif page == "EDA & Analysis":
             ] if c in df_fs.columns
         ]
         if raw_cols:
-            st.dataframe(
-                df_fs[raw_cols].describe().round(2),
-                width="stretch",
-            )
+            st.dataframe(df_fs[raw_cols].describe().round(2))
             st.caption(f"Feature store contains {len(df_fs):,} rows × {df_fs.shape[1]} columns.")
     else:
         st.info("Feature store empty or unavailable. Run `python -m features.backfill_historical`.")
@@ -287,7 +284,7 @@ elif page == "Model Diagnostics & XAI":
         lb_df = pd.DataFrame(meta["leaderboard"]).T.round(4)
         lb_df.index.name = "Model"
         lb_df = lb_df.sort_values("rmse")
-        st.dataframe(lb_df, width="stretch")
+        st.dataframe(lb_df)
 
         champ = meta["champion"]
         champ_m = meta["metrics"]
@@ -335,7 +332,7 @@ elif page == "Model Diagnostics & XAI":
             .head(20)
         )
         st.markdown("**Top 20 local feature contributions**")
-        st.dataframe(wdf, width="stretch", hide_index=True)
+        st.dataframe(wdf, hide_index=True)
 
         fig_lime = px.bar(
             wdf, x="LIME Weight", y="Feature",
@@ -415,4 +412,4 @@ else:
         st.plotly_chart(fig_w, width="stretch")
 
     st.subheader("Feature Store Sample (first 200 rows)")
-    st.dataframe(df_fs.head(200), width="stretch")
+    st.dataframe(df_fs.head(200))
