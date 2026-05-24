@@ -65,7 +65,11 @@ def _hopsworks_login():
     import hopsworks  # type: ignore
     api_key = os.environ["HOPSWORKS_API_KEY"]
     project_name = os.getenv("HOPSWORKS_PROJECT", _cfg()["hopsworks"]["project"])
-    project = hopsworks.login(api_key_value=api_key, project=project_name)
+    project = hopsworks.login(
+        project=project_name,
+        api_key_value=api_key,
+        host="eu-west.cloud.hopsworks.ai",
+    )
     logger.info("Connected to Hopsworks project: %s", project_name)
     return project
 
@@ -94,6 +98,13 @@ def push_to_store(df: pd.DataFrame) -> None:
                 "Pushing %d rows to Hopsworks FG '%s' v%d.",
                 len(df), cfg["feature_group_name"], cfg["feature_group_version"],
             )
+            # --- Begin verbose debug logs for GitHub Actions ---
+            print("--- DEBUG LOGS ---")
+            print(f"Connected to Project: {project.name}")
+            print(f"Target Feature Group: {fg.name} (version {fg.version})")
+            print(f"DataFrame shape being pushed: {df.shape}")
+            print(f"Sample data: \n{df.head(2)}")
+            # --- End verbose debug logs ---
             fg.insert(df, write_options={"wait_for_job": True})
             logger.info(
                 "Hopsworks FG '%s' v%d insert confirmed for %d rows.",

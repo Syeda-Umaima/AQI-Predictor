@@ -218,7 +218,11 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
             import hopsworks  # type: ignore
             cfg = _cfg()["hopsworks"]
             project_name = os.getenv("HOPSWORKS_PROJECT", cfg["project"])
-            project = hopsworks.login(api_key_value=api_key, project=project_name)
+            project = hopsworks.login(
+                project=project_name,
+                api_key_value=api_key,
+                host="eu-west.cloud.hopsworks.ai",
+            )
             mr = project.get_model_registry()
             registered = mr.python.create_model(
                 name=cfg["model_registry_name"],
