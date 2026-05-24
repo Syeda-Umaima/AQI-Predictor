@@ -183,6 +183,14 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
     df = add_target(df)
 
     df = df.dropna(subset=["target_aqi_next_72h"]).reset_index(drop=True)
+
+    # Fix for Hopsworks: cast any completely null columns to float to avoid dtype errors.
+    for col in df.columns:
+        if df[col].isnull().all():
+            try:
+                df[col] = df[col].astype(float)
+            except (ValueError, TypeError):
+                pass  # Ignore columns that cannot be cast to float
     return df
 
 
