@@ -16,6 +16,7 @@ jobs:
       PYTHONIOENCODING: "utf-8"
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
+      FEATURE_STORE_MODE: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +32,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run historical backfill (Open-Meteo → Feature Store)
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+          HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
+          FEATURE_STORE_MODE: ""
         run: python -m features.backfill_historical
 
       - name: Upload local feature store snapshot (Parquet fallback)
