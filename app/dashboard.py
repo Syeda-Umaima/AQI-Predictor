@@ -74,7 +74,7 @@ def _render_sidebar_logo() -> None:
 st.set_page_config(
     page_title="Pearls AQI Predictor — Hyderabad",
     page_icon="🌫️",
-    layout="wide",
+    layout="stretch",
     initial_sidebar_state="expanded",
 )
 
@@ -231,7 +231,7 @@ elif page == "EDA & Analysis":
     heatmap = _img_artifact("corr_heatmap.png")
     if heatmap:
         st.subheader("Pollutant Correlation Heatmap")
-        st.image(str(heatmap), use_column_width=True)
+        st.image(str(heatmap), use_column_width='always')
     else:
         st.info("Run `python -m data.eda_notebook_scaffold` to generate EDA artefacts.")
 
@@ -244,17 +244,17 @@ elif page == "EDA & Analysis":
         if html:
             with col:
                 st.subheader(title)
-                st.components.v1.html(html, height=420, scrolling=False)
+                st.html(html, height=420, scrolling=False)
 
     html_ts = _html_artifact("aqi_timeseries.html")
     if html_ts:
         st.subheader("AQI Over Time")
-        st.components.v1.html(html_ts, height=420, scrolling=False)
+        st.html(html_ts, height=420, scrolling=False)
 
     html_scatter = _html_artifact("pm25_vs_no2.html")
     if html_scatter:
         st.subheader("PM2.5 vs NO₂ (coloured by AQI)")
-        st.components.v1.html(html_scatter, height=420, scrolling=False)
+        st.html(html_scatter, height=420, scrolling=False)
 
     st.subheader("Live Feature Store — Quick Statistics")
     df_fs = _load_feature_store()
@@ -312,9 +312,9 @@ elif page == "Model Diagnostics & XAI":
     shap_s = _img_artifact("shap_summary.png")
     shap_b = _img_artifact("shap_bar.png")
     if shap_s:
-        col1.image(str(shap_s), caption="SHAP Summary (beeswarm)", use_column_width=True)
+        col1.image(str(shap_s), caption="SHAP Summary (beeswarm)", use_column_width='always')
     if shap_b:
-        col2.image(str(shap_b), caption="Mean |SHAP| (bar)", use_column_width=True)
+        col2.image(str(shap_b), caption="Mean |SHAP| (bar)", use_column_width='always')
     if not shap_s:
         st.info("Run `python -m training.evaluate` to generate SHAP and LIME artefacts.")
 
@@ -323,7 +323,7 @@ elif page == "Model Diagnostics & XAI":
     lime_plot = _img_artifact("lime_explanation.png")
     lime_json = ARTIFACTS / "lime_weights.json"
     if lime_plot:
-        st.image(str(lime_plot), caption="LIME local explanation (single forecast row)", use_column_width=True)
+        st.image(str(lime_plot), caption="LIME local explanation (single forecast row)", use_column_width='always')
     if lime_json.exists():
         weights = json.loads(lime_json.read_text(encoding="utf-8"))
         wdf = (
@@ -408,8 +408,8 @@ else:
             facet_col_wrap=2,
             labels={"value": "Value", "variable": "Variable"},
         )
-        fig_w.update_yaxes(matches=None)
-        st.plotly_chart(fig_w, width="stretch")
+        fig_w.update_yaxes(matches=None, title_text="")
+        st.plotly_chart(fig_w, use_container_width=True)
 
     st.subheader("Feature Store Sample (first 200 rows)")
     st.dataframe(df_fs.head(200))
