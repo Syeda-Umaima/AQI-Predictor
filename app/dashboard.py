@@ -9,7 +9,7 @@ Pages:
 
 Directive 4 compliance:
   - All file reads use encoding="utf-8" explicitly.
-  - use_container_width=True used instead of deprecated width="stretch".
+  - Streamlit layout now uses width="stretch" instead of deprecated use_container_width.
   - Hazardous AQI alert banners shown when forecast max >= threshold.
   - All deprecated Streamlit calls removed.
 """
@@ -48,6 +48,29 @@ def _aqi_label_color(aqi: float) -> tuple[str, str]:
     return "Hazardous", "#7f1d1d"
 
 
+def _render_sidebar_logo() -> None:
+    local_logo = ROOT / "assets" / "logo.png"
+    remote_logo = (
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/32/"
+        "Flag_of_Pakistan.svg/200px-Flag_of_Pakistan.svg.png"
+    )
+    if local_logo.exists():
+        st.sidebar.image(str(local_logo), width=80)
+        return
+
+    try:
+        import requests
+
+        head = requests.head(remote_logo, allow_redirects=True, timeout=3)
+        if head.status_code == 200 and "image" in head.headers.get("Content-Type", ""):
+            st.sidebar.image(remote_logo, width=80)
+            return
+    except Exception:
+        pass
+
+    st.sidebar.markdown("### 🌫️ Pearls AQI Predictor")
+
+
 st.set_page_config(
     page_title="Pearls AQI Predictor — Hyderabad",
     page_icon="🌫️",
@@ -55,11 +78,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.sidebar.image(
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/3/32/Flag_of_Pakistan.svg/200px-Flag_of_Pakistan.svg.png",
-    width=80,
-)
-st.sidebar.markdown(f"### 🌫️ Pearls AQI Predictor")
+_render_sidebar_logo()
 st.sidebar.markdown(f"**City:** {CITY}")
 st.sidebar.markdown("---")
 
@@ -192,12 +211,12 @@ if page == "Real-Time Forecast":
         height=460,
         showlegend=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("Forecast Detail Table")
     display_df = df.rename(columns={"timestamp": "Timestamp (UTC)", "predicted_aqi": "Predicted AQI"})
     display_df["Category"] = display_df["Predicted AQI"].apply(lambda v: _aqi_label_color(v)[0])
-    st.dataframe(display_df.set_index("Timestamp (UTC)"), use_container_width=True)
+    st.dataframe(display_df.set_index("Timestamp (UTC)"), width="stretch")
 
 
 # ============================================================= PAGE 2
@@ -212,7 +231,7 @@ elif page == "EDA & Analysis":
     heatmap = _img_artifact("corr_heatmap.png")
     if heatmap:
         st.subheader("Pollutant Correlation Heatmap")
-        st.image(str(heatmap), use_container_width=True)
+        st.image(str(heatmap), use_column_width=True)
     else:
         st.info("Run `python -m data.eda_notebook_scaffold` to generate EDA artefacts.")
 
@@ -249,7 +268,7 @@ elif page == "EDA & Analysis":
         if raw_cols:
             st.dataframe(
                 df_fs[raw_cols].describe().round(2),
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(f"Feature store contains {len(df_fs):,} rows × {df_fs.shape[1]} columns.")
     else:
@@ -268,7 +287,7 @@ elif page == "Model Diagnostics & XAI":
         lb_df = pd.DataFrame(meta["leaderboard"]).T.round(4)
         lb_df.index.name = "Model"
         lb_df = lb_df.sort_values("rmse")
-        st.dataframe(lb_df, use_container_width=True)
+        st.dataframe(lb_df, width="stretch")
 
         champ = meta["champion"]
         champ_m = meta["metrics"]
@@ -288,7 +307,7 @@ elif page == "Model Diagnostics & XAI":
             template="plotly_white",
             color_discrete_sequence=px.colors.qualitative.Pastel,
         )
-        st.plotly_chart(fig_lb, use_container_width=True)
+        st.plotly_chart(fig_lb, width="stretch")
 
     st.markdown("---")
     st.subheader("SHAP — Global Feature Importance")
@@ -296,9 +315,9 @@ elif page == "Model Diagnostics & XAI":
     shap_s = _img_artifact("shap_summary.png")
     shap_b = _img_artifact("shap_bar.png")
     if shap_s:
-        col1.image(str(shap_s), caption="SHAP Summary (beeswarm)", use_container_width=True)
+        col1.image(str(shap_s), caption="SHAP Summary (beeswarm)", use_column_width=True)
     if shap_b:
-        col2.image(str(shap_b), caption="Mean |SHAP| (bar)", use_container_width=True)
+        col2.image(str(shap_b), caption="Mean |SHAP| (bar)", use_column_width=True)
     if not shap_s:
         st.info("Run `python -m training.evaluate` to generate SHAP and LIME artefacts.")
 
@@ -307,7 +326,7 @@ elif page == "Model Diagnostics & XAI":
     lime_plot = _img_artifact("lime_explanation.png")
     lime_json = ARTIFACTS / "lime_weights.json"
     if lime_plot:
-        st.image(str(lime_plot), caption="LIME local explanation (single forecast row)", use_container_width=True)
+        st.image(str(lime_plot), caption="LIME local explanation (single forecast row)", use_column_width=True)
     if lime_json.exists():
         weights = json.loads(lime_json.read_text(encoding="utf-8"))
         wdf = (
@@ -316,7 +335,7 @@ elif page == "Model Diagnostics & XAI":
             .head(20)
         )
         st.markdown("**Top 20 local feature contributions**")
-        st.dataframe(wdf, use_container_width=True, hide_index=True)
+        st.dataframe(wdf, width="stretch", hide_index=True)
 
         fig_lime = px.bar(
             wdf, x="LIME Weight", y="Feature",
@@ -328,7 +347,7 @@ elif page == "Model Diagnostics & XAI":
             color_continuous_midpoint=0,
         )
         fig_lime.update_layout(yaxis=dict(autorange="reversed"), height=520)
-        st.plotly_chart(fig_lime, use_container_width=True)
+        st.plotly_chart(fig_lime, width="stretch")
 
 
 # ============================================================= PAGE 4
@@ -354,7 +373,7 @@ else:
             labels={"us_aqi": "US AQI", "timestamp": "Time (UTC)"},
         )
         fig_ts.update_traces(line_color="#3b82f6")
-        st.plotly_chart(fig_ts, use_container_width=True)
+        st.plotly_chart(fig_ts, width="stretch")
 
     pollutant_cols = [
         c for c in ["pm2_5", "pm10", "nitrogen_dioxide", "ozone", "carbon_monoxide", "dust"]
@@ -375,7 +394,7 @@ else:
                 template="plotly_white",
                 labels={"value": "Concentration", "variable": "Pollutant"},
             )
-            st.plotly_chart(fig_p, use_container_width=True)
+            st.plotly_chart(fig_p, width="stretch")
 
     weather_cols = [
         c for c in ["temperature_2m", "relative_humidity_2m", "wind_speed_10m", "surface_pressure"]
@@ -393,7 +412,7 @@ else:
             labels={"value": "Value", "variable": "Variable"},
         )
         fig_w.update_yaxes(matches=None)
-        st.plotly_chart(fig_w, use_container_width=True)
+        st.plotly_chart(fig_w, width="stretch")
 
     st.subheader("Feature Store Sample (first 200 rows)")
-    st.dataframe(df_fs.head(200), use_container_width=True)
+    st.dataframe(df_fs.head(200), width="stretch")

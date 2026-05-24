@@ -21,10 +21,12 @@ import os
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
 import yaml
 
 logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 def _cfg() -> dict:
@@ -73,10 +75,14 @@ def push_to_store(df: pd.DataFrame) -> None:
                     "Open-Meteo weather + air quality, 100-200 columns."
                 ),
             )
-            fg.insert(df, write_options={"wait_for_job": False})
             logger.info(
-                "Inserted %d rows into Hopsworks FG '%s' v%d.",
+                "Pushing %d rows to Hopsworks FG '%s' v%d.",
                 len(df), cfg["feature_group_name"], cfg["feature_group_version"],
+            )
+            fg.insert(df, write_options={"wait_for_job": True})
+            logger.info(
+                "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
+                cfg["feature_group_name"], cfg["feature_group_version"], len(df),
             )
             return
         except Exception as exc:
