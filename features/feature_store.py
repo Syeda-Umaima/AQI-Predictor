@@ -40,9 +40,24 @@ def _parquet_path() -> Path:
 
 
 def _use_hopsworks() -> bool:
-    if os.getenv("FEATURE_STORE_MODE", "").lower() == "parquet":
+    store_mode = os.getenv("FEATURE_STORE_MODE", "").lower()
+    api_key = os.getenv("HOPSWORKS_API_KEY", "")
+
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        if store_mode == "parquet":
+            raise EnvironmentError(
+                "GitHub Actions must not run with FEATURE_STORE_MODE=parquet for Hopsworks ingestion. "
+                "Set FEATURE_STORE_MODE=cloud or leave it blank."
+            )
+        if not api_key:
+            raise EnvironmentError(
+                "HOPSWORKS_API_KEY is required in GitHub Actions for cloud ingestion. "
+                "Add it as a repository secret and map it in the workflow."
+            )
+
+    if store_mode == "parquet":
         return False
-    return bool(os.getenv("HOPSWORKS_API_KEY"))
+    return bool(api_key)
 
 
 def _hopsworks_login():
@@ -86,6 +101,12 @@ def push_to_store(df: pd.DataFrame) -> None:
             )
             return
         except Exception as exc:
+            if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+                logger.error(
+                    "Hopsworks push failed in GitHub Actions (%s) — failing workflow instead of falling back.",
+                    exc,
+                )
+                raise
             logger.warning("Hopsworks push failed (%s) — writing to local Parquet.", exc)
 
     _write_parquet(df, cfg)

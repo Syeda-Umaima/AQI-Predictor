@@ -16,7 +16,7 @@ jobs:
       PYTHONIOENCODING: "utf-8"
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
-      FEATURE_STORE_MODE: ""
+      FEATURE_STORE_MODE: "cloud"
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
         env:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
           HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
-          FEATURE_STORE_MODE: ""
+          FEATURE_STORE_MODE: "cloud"
         run: python -m features.backfill_historical
 
       - name: Upload local feature store snapshot (Parquet fallback)
