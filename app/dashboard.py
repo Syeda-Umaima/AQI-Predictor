@@ -74,7 +74,7 @@ def _render_sidebar_logo() -> None:
 st.set_page_config(
     page_title="Pearls AQI Predictor — Hyderabad",
     page_icon="🌫️",
-    layout="stretch",
+    layout="wide",
     initial_sidebar_state="expanded",
 )
 
