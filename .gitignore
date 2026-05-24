@@ -4,8 +4,12 @@ _pdf_extract.txt
 
 # Secrets — never commit
 .env
+*.env
 .env.local
 .env.*.local
+
+# Local AI context tracker / IDE / personal caches — never commit
+.sixth/
 
 # Python
 .venv/
