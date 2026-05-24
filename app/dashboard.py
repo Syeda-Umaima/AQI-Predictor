@@ -244,17 +244,20 @@ elif page == "EDA & Analysis":
         if html:
             with col:
                 st.subheader(title)
-                st.html(html, height=420, scrolling=False)
+                with st.container(height=420):
+                    st.html(html)
 
     html_ts = _html_artifact("aqi_timeseries.html")
     if html_ts:
         st.subheader("AQI Over Time")
-        st.html(html_ts, height=420, scrolling=False)
+        with st.container(height=420):
+            st.html(html_ts)
 
     html_scatter = _html_artifact("pm25_vs_no2.html")
     if html_scatter:
         st.subheader("PM2.5 vs NO₂ (coloured by AQI)")
-        st.html(html_scatter, height=420, scrolling=False)
+        with st.container(height=420):
+            st.html(html_scatter)
 
     st.subheader("Live Feature Store — Quick Statistics")
     df_fs = _load_feature_store()
