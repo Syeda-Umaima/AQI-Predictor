@@ -69,12 +69,14 @@ def time_ordered_split(df: pd.DataFrame, test_size: float):
 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
-    """All numeric columns except timestamp and target."""
+    """All numeric columns except timestamp, target, and constant features."""
     drop = {"timestamp", TARGET}
-    return [
-        c for c in df.columns
-        if c not in drop and pd.api.types.is_numeric_dtype(df[c])
-    ]
+    valid_cols = []
+    for c in df.columns:
+        if c not in drop and pd.api.types.is_numeric_dtype(df[c]):
+            if df[c].nunique() > 1:
+                valid_cols.append(c)
+    return valid_cols
 
 
 # ------------------------------------------------------------------- Metrics
@@ -245,10 +247,18 @@ def main() -> None:
     df = load_training_frame()
     if df.empty:
         raise RuntimeError("Feature store is empty. Run backfill first.")
-
+ 
+    # Drop rows with NaNs (rolling window edges and lookahead targets)
+    logger.info("Before cleaning NaNs: %d rows", len(df))
+    df = df.dropna().reset_index(drop=True)
+    logger.info("After cleaning NaNs: %d rows", len(df))
+ 
+    if df.empty:
+        raise RuntimeError("DataFrame is empty after dropping NaNs. Check feature engineering.")
+ 
     train_df, test_df = time_ordered_split(df, cfg["test_size"])
     cols = feature_columns(df)
-
+ 
     logger.info(
         "Split: %d train rows / %d test rows / %d feature columns.",
         len(train_df), len(test_df), len(cols),
