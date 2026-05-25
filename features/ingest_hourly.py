@@ -54,6 +54,10 @@ def run_hourly_ingest() -> pd.DataFrame:
         raise RuntimeError("Feature engineering produced no rows after hourly ingest.")
 
     n_feats = count_feature_columns(features)
+    # Explicitly cast us_aqi to float to match Hopsworks schema (double).
+    if "us_aqi" in features.columns:
+        features["us_aqi"] = features["us_aqi"].astype(float)
+
     push_to_store(features)
     logger.info(
         "Hourly ingest complete: appended %d rows × %d feature columns.",
