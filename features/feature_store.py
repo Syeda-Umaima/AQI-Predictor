@@ -168,10 +168,19 @@ def load_features() -> pd.DataFrame:
 
     path = _parquet_path()
     if not path.exists():
-        raise FileNotFoundError(
-            f"No feature data found at {path}. "
-            "Run `python -m features.backfill_historical` first."
+        logger.info(
+            "Local parquet file not found. Automatically triggering historical backfill to regenerate features locally..."
         )
+        try:
+            import subprocess
+            import sys
+
+            subprocess.run([sys.executable, "-m", "features.backfill_historical"], check=True)
+        except Exception as e:
+            raise FileNotFoundError(
+                f"No feature data found at {path} and automated backfill failed: {e}. "
+                "Run `python -m features.backfill_historical` first."
+            )
     df = pd.read_parquet(path)
     logger.info("Loaded %d rows from local Parquet store at %s.", len(df), path)
     return df
