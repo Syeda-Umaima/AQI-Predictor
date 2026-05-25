@@ -248,14 +248,37 @@ def main() -> None:
     if df.empty:
         raise RuntimeError("Feature store is empty. Run backfill first.")
  
-    # Drop rows with NaNs (rolling window edges and lookahead targets)
-    logger.info("Before cleaning NaNs: %d rows", len(df))
-    df = df.dropna().reset_index(drop=True)
-    logger.info("After cleaning NaNs: %d rows", len(df))
+    logger.info("Initial dataframe shape: %s", df.shape)
+
+    # 1. Identify valid feature candidates
+    drop_cols = {"timestamp", TARGET}
+    feature_candidates = [
+        c for c in df.columns 
+        if c not in drop_cols and pd.api.types.is_numeric_dtype(df[c])
+    ]
+
+    # 2. Filter out columns that are entirely NaN or have zero variance (constant)
+    valid_features = []
+    for c in feature_candidates:
+        if df[c].isna().all():
+            logger.warning("Dropping column '%s' because it is entirely NaN.", c)
+            continue
+        if df[c].nunique() <= 1:
+            logger.warning("Dropping column '%s' because it has zero variance (constant).", c)
+            continue
+        valid_features.append(c)
+
+    # 3. Retain only essential columns and drop rows with NaNs in valid features/target
+    keep_cols = ["timestamp", TARGET] + valid_features
+    df = df[keep_cols]
+    
+    df = df.dropna(subset=[TARGET] + valid_features).reset_index(drop=True)
+    logger.info("Dataframe shape after cleaning: %s", df.shape)
  
     if df.empty:
-        raise RuntimeError("DataFrame is empty after dropping NaNs. Check feature engineering.")
+        raise RuntimeError("DataFrame is empty after processing. Check feature engineering or target alignment.")
  
+    # 4. Proceed with time-ordered split and training
     train_df, test_df = time_ordered_split(df, cfg["test_size"])
     cols = feature_columns(df)
  
