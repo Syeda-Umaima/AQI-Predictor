@@ -110,7 +110,6 @@ def push_to_store(df: pd.DataFrame) -> None:
                 "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
                 cfg["feature_group_name"], cfg["feature_group_version"], len(df),
             )
-            return
         except Exception as exc:
             if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
                 logger.error(
