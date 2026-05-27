@@ -45,7 +45,7 @@ MODELS_DIR.mkdir(exist_ok=True)
 ARTIFACTS = ROOT / "artifacts"
 ARTIFACTS.mkdir(exist_ok=True)
 
-TARGET = "target_aqi_next_72h"
+TARGET = "target_aqi_next_1h"
 
 
 def _cfg() -> dict:

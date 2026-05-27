@@ -144,22 +144,14 @@ def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------- Target
 def add_target(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Supervised regression target: mean us_aqi over the NEXT 72 hours.
-    Computed as a strictly forward-shifted rolling mean to avoid leakage.
-    Rows where the full 72h horizon is unavailable are dropped downstream.
+    Supervised regression target: us_aqi in the NEXT 1 hour.
+    Computed as a strictly forward-shifted value to avoid leakage.
+    Rows where the 1h horizon is unavailable are dropped downstream.
     """
-    cfg = _cfg()
-    horizon = cfg["features"]["target_horizon_hours"]
     df = df.sort_values("timestamp").reset_index(drop=True)
     if "us_aqi" not in df.columns:
         return df
-    df["target_aqi_next_72h"] = (
-        df["us_aqi"]
-        .shift(-(horizon - 1))
-        .rolling(horizon, min_periods=horizon)
-        .mean()
-        .shift(-(1))
-    )
+    df["target_aqi_next_1h"] = df["us_aqi"].shift(-1)
     return df
 
 
@@ -182,7 +174,7 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
     df = add_aqi_change_rate(df)
     df = add_target(df)
 
-    df = df.dropna(subset=["target_aqi_next_72h"]).reset_index(drop=True)
+    df = df.dropna(subset=["target_aqi_next_1h"]).reset_index(drop=True)
 
     # Fix for Hopsworks: cast any completely null columns to float to avoid dtype errors.
     for col in df.columns:
@@ -196,7 +188,7 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
 
 def count_feature_columns(df: pd.DataFrame) -> int:
     """Return number of engineered numeric feature columns (excludes timestamp, target)."""
-    non_feature = {"timestamp", "target_aqi_next_72h"}
+    non_feature = {"timestamp", "target_aqi_next_1h"}
     return sum(
         1 for c in df.columns
         if c not in non_feature and pd.api.types.is_numeric_dtype(df[c])
