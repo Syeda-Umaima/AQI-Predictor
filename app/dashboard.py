@@ -130,9 +130,11 @@ def _load_feature_store() -> pd.DataFrame | None:
     try:
         from features.feature_store import load_features
         return load_features()
-    except Exception:
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load data from feature store: {e}")
+        st.code(traceback.format_exc())
         return None
-
 
 def _html_artifact(filename: str) -> str | None:
     path = ARTIFACTS / filename
@@ -228,40 +230,74 @@ elif page == "EDA & Analysis":
         "PM2.5 vs NO₂ relationships. All charts are computed from the live Feature Store."
     )
 
-    heatmap = _img_artifact("corr_heatmap.png")
-    if heatmap:
+    df_fs = _load_feature_store()
+
+    if df_fs is None or df_fs.empty:
+        st.warning("Feature store is empty or unavailable. Run `python -m features.backfill_historical`.")
+        st.stop()
+
+    st.markdown("---")
+
+    corr_cols = [c for c in ["us_aqi", "pm2_5", "pm10", "nitrogen_dioxide", "ozone", "sulphur_dioxide", "carbon_monoxide", "dust", "temperature_2m", "relative_humidity_2m", "wind_speed_10m"] if c in df_fs.columns]
+    if len(corr_cols) > 1:
         st.subheader("Pollutant Correlation Heatmap")
-        st.image(str(heatmap), use_column_width='always')
-    else:
-        st.info("Run `python -m data.eda_notebook_scaffold` to generate EDA artefacts.")
+        corr_matrix = df_fs[corr_cols].corr()
+        fig = px.imshow(corr_matrix, text_auto=".2f", aspect="auto", color_continuous_scale='RdBu_r', title="Feature Correlation Matrix")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
-    for title, fname, col in [
-        ("Diurnal AQI Cycle", "hourly_seasonality.html", col1),
-        ("Monthly AQI Seasonality", "monthly_seasonality.html", col2),
-    ]:
-        html = _html_artifact(fname)
-        if html:
-            with col:
-                st.subheader(title)
-                with st.container(height=420):
-                    st.html(html)
 
-    html_ts = _html_artifact("aqi_timeseries.html")
-    if html_ts:
+    with col1:
+        st.subheader("Diurnal AQI Cycle")
+        if "us_aqi" in df_fs.columns:
+            df_fs["hour"] = pd.to_datetime(df_fs["timestamp"]).dt.hour
+            hourly_aqi = df_fs.groupby("hour")["us_aqi"].mean().reset_index()
+            fig = px.line(hourly_aqi, x="hour", y="us_aqi", title="Average AQI by Hour of Day", markers=True)
+            fig.update_layout(xaxis_title="Hour of Day", yaxis_title="Mean US AQI")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Column 'us_aqi' not found for Diurnal Cycle plot.")
+
+    with col2:
+        st.subheader("Monthly AQI Seasonality")
+        if "us_aqi" in df_fs.columns:
+            df_fs["month"] = pd.to_datetime(df_fs["timestamp"]).dt.month
+            monthly_aqi = df_fs.groupby("month")["us_aqi"].mean().reset_index()
+            fig = px.line(monthly_aqi, x="month", y="us_aqi", title="Average AQI by Month", markers=True)
+            fig.update_layout(xaxis_title="Month", yaxis_title="Mean US AQI")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Column 'us_aqi' not found for Monthly Seasonality plot.")
+
+    st.markdown("---")
+
+    if "us_aqi" in df_fs.columns:
         st.subheader("AQI Over Time")
-        with st.container(height=420):
-            st.html(html_ts)
+        fig = px.line(df_fs.sort_values("timestamp"), x="timestamp", y="us_aqi", title="Historical AQI from Feature Store")
+        st.plotly_chart(fig, use_container_width=True)
 
-    html_scatter = _html_artifact("pm25_vs_no2.html")
-    if html_scatter:
+    st.markdown("---")
+
+    scatter_cols = ["pm2_5", "nitrogen_dioxide", "us_aqi"]
+    if all(c in df_fs.columns for c in scatter_cols):
         st.subheader("PM2.5 vs NO₂ (coloured by AQI)")
-        with st.container(height=420):
-            st.html(html_scatter)
+        fig = px.scatter(
+            df_fs.sample(min(len(df_fs), 2000)),
+            x="pm2_5",
+            y="nitrogen_dioxide",
+            color="us_aqi",
+            title="PM2.5 vs. Nitrogen Dioxide",
+            color_continuous_scale=px.colors.sequential.OrRd,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning(f"One or more columns missing for scatter plot: {scatter_cols}")
 
+    st.markdown("---")
     st.subheader("Live Feature Store — Quick Statistics")
-    df_fs = _load_feature_store()
-    if df_fs is not None and not df_fs.empty:
+    if not df_fs.empty:
         raw_cols = [
             c for c in [
                 "us_aqi", "pm2_5", "pm10", "nitrogen_dioxide",
@@ -271,8 +307,6 @@ elif page == "EDA & Analysis":
         if raw_cols:
             st.dataframe(df_fs[raw_cols].describe().round(2))
             st.caption(f"Feature store contains {len(df_fs):,} rows × {df_fs.shape[1]} columns.")
-    else:
-        st.info("Feature store empty or unavailable. Run `python -m features.backfill_historical`.")
 
 
 # ============================================================= PAGE 3

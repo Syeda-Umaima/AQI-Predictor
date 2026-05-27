@@ -128,6 +128,21 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ------------------------------------------------------------- Forecast
+def add_forecast_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Lookahead features for the 72h forecast target.
+    Shifts future weather data to the current row to give the model a
+    view of the conditions at the time of the prediction target.
+    """
+    df = df.copy()
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["temperature_lookahead_72h"] = df["temperature_2m"].shift(-72)
+    df["wind_speed_lookahead_72h"] = df["wind_speed_10m"].shift(-72)
+    df["precipitation_lookahead_72h"] = df["precipitation"].shift(-72)
+    return df
+
+
 # --------------------------------------------------------------- AQI change
 def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
     """Delta AQI over 3h, 6h, 12h, 24h backward windows (no future data)."""
@@ -144,14 +159,14 @@ def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------- Target
 def add_target(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Supervised regression target: us_aqi in the NEXT 1 hour.
+    Supervised regression target: us_aqi in the NEXT 72 hours.
     Computed as a strictly forward-shifted value to avoid leakage.
-    Rows where the 1h horizon is unavailable are dropped downstream.
+    Rows where the 72h horizon is unavailable are dropped downstream.
     """
     df = df.sort_values("timestamp").reset_index(drop=True)
     if "us_aqi" not in df.columns:
         return df
-    df["target_aqi_next_1h"] = df["us_aqi"].shift(-1)
+    df["target_aqi_next_72h"] = df["us_aqi"].shift(-72)
     return df
 
 
@@ -171,10 +186,11 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
     df = add_lag_features(df)
     df = add_rolling_features(df)
     df = add_interaction_features(df)
+    df = add_forecast_features(df)
     df = add_aqi_change_rate(df)
     df = add_target(df)
 
-    df = df.dropna(subset=["target_aqi_next_1h"]).reset_index(drop=True)
+    df = df.dropna(subset=["target_aqi_next_72h"]).reset_index(drop=True)
 
     # Fix for Hopsworks: cast any completely null columns to float to avoid dtype errors.
     for col in df.columns:
@@ -188,7 +204,7 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
 
 def count_feature_columns(df: pd.DataFrame) -> int:
     """Return number of engineered numeric feature columns (excludes timestamp, target)."""
-    non_feature = {"timestamp", "target_aqi_next_1h"}
+    non_feature = {"timestamp", "target_aqi_next_72h"}
     return sum(
         1 for c in df.columns
         if c not in non_feature and pd.api.types.is_numeric_dtype(df[c])
