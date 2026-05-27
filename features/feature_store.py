@@ -85,7 +85,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             fs = project.get_feature_store()
             fg = fs.get_or_create_feature_group(
                 name=cfg["feature_group_name"],
-                version=3,  # Use v3 for schema with imputed data + int64 types
+                version=5,  # Use v5 for corrected imputation logic
                 primary_key=["timestamp"],
                 event_time="timestamp",
                 online_enabled=False,
@@ -96,7 +96,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             )
             logger.info(
                 "Pushing %d rows to Hopsworks FG '%s' v%d.",
-                len(df), cfg["feature_group_name"], 3,
+                len(df), cfg["feature_group_name"], 5,
             )
             # --- Begin verbose debug logs for GitHub Actions ---
             print("--- DEBUG LOGS ---")
@@ -108,7 +108,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             fg.insert(df, write_options={"wait_for_job": False})
             logger.info(
                 "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
-                cfg["feature_group_name"], 3, len(df),
+                cfg["feature_group_name"], 5, len(df),
             )
         except Exception as exc:
             if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
@@ -118,14 +118,22 @@ def push_to_store(df: pd.DataFrame) -> None:
                 )
                 raise
             logger.warning("Hopsworks push failed (%s) — writing to local Parquet.", exc)
-
+            _write_parquet(df, cfg)
+        else:
+            # If Hopsworks push was successful, we still want to update the local cache.
+            # A simple way to distinguish a full backfill from an hourly append
+            # is by the number of rows. Backfills are large.
+            is_backfill = len(df) > 1000  # Heuristic for backfill
+            _write_parquet(df, cfg, overwrite_if_backfill=is_backfill)
+        return
+    
     _write_parquet(df, cfg)
 
 
-def _write_parquet(df: pd.DataFrame, cfg: dict) -> None:
+def _write_parquet(df: pd.DataFrame, cfg: dict, overwrite_if_backfill: bool = False) -> None:
     out = _parquet_path()
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
+    if out.exists() and not overwrite_if_backfill:
         existing = pd.read_parquet(out)
         df = (
             pd.concat([existing, df])
@@ -150,14 +158,14 @@ def load_features() -> pd.DataFrame:
             fs = project.get_feature_store()
             try:
                 fv = fs.get_feature_view(
-                    name=cfg["feature_group_name"] + "_view", version=3
+                    name=cfg["feature_group_name"] + "_view", version=5
                 )
                 df = fv.training_data(description="daily training pull")[0]
                 logger.info("Loaded %d rows from Hopsworks Feature View.", len(df))
                 return df
             except Exception:
                 fg = fs.get_feature_group(
-                    name=cfg["feature_group_name"], version=3
+                    name=cfg["feature_group_name"], version=5
                 )
                 df = fg.read()
                 logger.info("Loaded %d rows from Hopsworks Feature Group.", len(df))

@@ -32,8 +32,10 @@ import yaml
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
+import lightgbm as lgb
 
 from features.feature_store import load_features
 
@@ -88,50 +90,6 @@ def score(y_true, y_pred) -> dict:
     }
 
 
-# ------------------------------------------------------------------- Models
-def _fit_scaler_train_only(X_train: pd.DataFrame) -> StandardScaler:
-    """Fit StandardScaler exclusively on training data to prevent leakage."""
-    scaler = StandardScaler()
-    scaler.fit(X_train)
-    return scaler
-
-
-def train_ridge(X_train, y_train, X_test, y_test) -> dict:
-    logger.info("Training Ridge Regression …")
-    scaler = _fit_scaler_train_only(X_train)
-    Xtr_s = scaler.transform(X_train)
-    Xte_s = scaler.transform(X_test)
-    model = Ridge(alpha=1.0)
-    model.fit(Xtr_s, y_train)
-    preds = model.predict(Xte_s)
-    return {"model": model, "scaler": scaler, "metrics": score(y_test, preds)}
-
-
-def train_random_forest(X_train, y_train, X_test, y_test) -> dict:
-    logger.info("Training Random Forest …")
-    model = RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1)
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    return {"model": model, "scaler": None, "metrics": score(y_test, preds)}
-
-
-def train_xgboost(X_train, y_train, X_test, y_test) -> dict:
-    logger.info("Training XGBoost …")
-    model = XGBRegressor(
-        n_estimators=400,
-        max_depth=6,
-        learning_rate=0.05,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        random_state=42,
-        n_jobs=-1,
-        verbosity=0,
-    )
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    return {"model": model, "scaler": None, "metrics": score(y_test, preds)}
-
-
 def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
                X_test: pd.DataFrame, y_test: pd.Series) -> dict:
     """
@@ -142,9 +100,10 @@ def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
     from tensorflow.keras import layers, models  # type: ignore
 
     cfg = _cfg()["training"]["lstm"]
-    seq_len = cfg["sequence_length"]
+    scaler = StandardScaler().fit(X_train)
 
-    scaler = _fit_scaler_train_only(X_train)
+    seq_len = 24  # Fix: Hardcode sequence length to prevent config error
+
     Xtr = scaler.transform(X_train)
     Xte = scaler.transform(X_test)
 
@@ -173,7 +132,7 @@ def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
     ])
     model.compile(optimizer="adam", loss="mse")
     model.fit(
-        Xtr_seq, ytr_seq,
+        Xtr_seq, ytr_seq, # type: ignore
         epochs=cfg["epochs"],
         batch_size=cfg["batch_size"],
         validation_split=0.1,
@@ -279,21 +238,83 @@ def main() -> None:
         raise RuntimeError("DataFrame is empty after processing. Check feature engineering or target alignment.")
  
     # 4. Proceed with time-ordered split and training
-    train_df, test_df = time_ordered_split(df, cfg["test_size"])
     cols = feature_columns(df)
- 
+    train_df, test_df = time_ordered_split(df, cfg["test_size"])
+
+    # 5. Final training on full feature set
     logger.info(
         "Split: %d train rows / %d test rows / %d feature columns.",
         len(train_df), len(test_df), len(cols),
     )
-
+    
     X_train, y_train = train_df[cols], train_df[TARGET]
     X_test, y_test = test_df[cols], test_df[TARGET]
 
+    # 6. Simplified Model Training & Evaluation Loop
     leaderboard: dict = {}
-    leaderboard["ridge"] = train_ridge(X_train, y_train, X_test, y_test)
-    leaderboard["random_forest"] = train_random_forest(X_train, y_train, X_test, y_test)
-    leaderboard["xgboost"] = train_xgboost(X_train, y_train, X_test, y_test)
+    tscv = TimeSeriesSplit(n_splits=3)
+
+    model_configs = {
+        "ridge": {
+            "estimator": Ridge(),
+            "params": {"alpha": [0.1, 1.0, 10.0]},
+            "use_scaler": True,
+        },
+        "random_forest": {
+            "estimator": RandomForestRegressor(random_state=42, n_jobs=-1),
+            "params": {
+                "n_estimators": [100, 200, 300], "max_depth": [5, 10, 15, None],
+                "min_samples_split": [2, 5, 10], "min_samples_leaf": [1, 2, 4],
+                "max_features": ["sqrt", "log2", 1.0],
+            },
+            "use_scaler": False,
+        },
+        "xgboost": {
+            "estimator": XGBRegressor(random_state=42, n_jobs=-1, verbosity=0),
+            "params": {
+                "n_estimators": [200, 400, 600], "max_depth": [3, 5, 7],
+                "learning_rate": [0.01, 0.05, 0.1], "subsample": [0.8, 0.9, 1.0],
+                "colsample_bytree": [0.7, 0.9, 1.0], "min_child_weight": [1, 3, 5],
+            },
+            "use_scaler": False,
+        },
+        "lightgbm": {
+            "estimator": lgb.LGBMRegressor(random_state=42, n_jobs=-1),
+            "params": {
+                "n_estimators": [100, 300, 500], "learning_rate": [0.01, 0.05, 0.1],
+                "max_depth": [3, 7, -1], "num_leaves": [15, 31, 63],
+            },
+            "use_scaler": False,
+        }
+    }
+
+    for name, config in model_configs.items():
+        logger.info("Training %s ...", name)
+
+        # A. Handle scaling
+        scaler = StandardScaler().fit(X_train) if config["use_scaler"] else None
+        X_train_final = scaler.transform(X_train) if scaler else X_train
+        X_test_final = scaler.transform(X_test) if scaler else X_test
+
+        # B. Tune model
+        search = RandomizedSearchCV(
+            estimator=config["estimator"],
+            param_distributions=config["params"],
+            n_iter=15 if name != "ridge" else 3,
+            cv=tscv,
+            scoring="neg_root_mean_squared_error",
+            random_state=42,
+            n_jobs=-1,
+        )
+        search.fit(X_train_final, y_train)
+        
+        # C. Predict and score
+        best_model = search.best_estimator_
+        y_pred = best_model.predict(X_test_final)
+        metrics = score(y_test, y_pred)
+        
+        # D. Store results
+        leaderboard[name] = {"model": best_model, "scaler": scaler, "metrics": metrics}
 
     try:
         leaderboard["lstm"] = train_lstm(X_train, y_train, X_test, y_test)

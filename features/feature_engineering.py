@@ -41,12 +41,12 @@ def add_temporal_embeddings(df: pd.DataFrame) -> pd.DataFrame:
     df["day_of_week"] = ts.dt.dayofweek
     df["month"] = ts.dt.month
     df["day_of_year"] = ts.dt.dayofyear
-    df["week_of_year"] = ts.dt.isocalendar().week.astype("int64")
-    df["is_weekend"] = (ts.dt.dayofweek >= 5).astype("int64")
-    df["is_rush_hour"] = (  # Explicitly cast to int64 for Hopsworks 'bigint'
+    df["week_of_year"] = ts.dt.isocalendar().week
+    df["is_weekend"] = ts.dt.dayofweek >= 5
+    df["is_rush_hour"] = (
         ((ts.dt.hour >= 7) & (ts.dt.hour <= 9))
         | ((ts.dt.hour >= 17) & (ts.dt.hour <= 20))
-    ).astype(int)
+    )
 
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
@@ -184,12 +184,24 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
 
     df = raw.sort_values("timestamp").reset_index(drop=True)
 
-    # Impute missing values with ffill/bfill to prevent massive data loss from dropna()
-    # on older historical data that may have gaps.
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-    df[numeric_cols] = df[numeric_cols].ffill().bfill()
-    logger.info("Imputed missing values in raw data using ffill/bfill.")
+    # --- SAFE IMPUTATION & CLEANING ---
+    # 1. Drop rows where primary AQI/pollutant data is missing. This prevents
+    #    imputing the target variable across large historical gaps.
+    primary_cols = [
+        'us_aqi', 'pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone',
+        'sulphur_dioxide', 'carbon_monoxide', 'dust'
+    ]
+    df = df.dropna(subset=primary_cols)
+    logger.info("Dropped rows with missing primary pollutants. Rows remaining: %d", len(df))
 
+    # 2. For remaining rows, forward-fill small gaps (<=3 hours) in weather data.
+    cfg = _cfg()
+    weather_cols = [c for c in cfg["open_meteo"]["weather_hourly_vars"] if c in df.columns]
+    df[weather_cols] = df[weather_cols].ffill(limit=3)
+    logger.info("Forward-filled small gaps in weather data (limit=3).")
+
+    df = df.reset_index(drop=True)
+    
     df = add_temporal_embeddings(df)
     df = add_lag_features(df)
     df = add_rolling_features(df)
