@@ -32,7 +32,7 @@ def _cfg() -> dict:
 def fetch_historical_raw() -> pd.DataFrame | None:
     """Attempt to fetch combined historical data from Open-Meteo."""
     cfg = _cfg()
-    days = cfg["backfill"]["days"]
+    days = 730  # Increase from 30 to 730 days (2 years) to fix data scarcity.
     try:
         client = OpenMeteoClient()
         df = client.fetch_combined_historical(days=days)
