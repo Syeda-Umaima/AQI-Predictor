@@ -16,12 +16,14 @@ Data-leakage prevention:
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
 
+logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
 
 
@@ -39,9 +41,9 @@ def add_temporal_embeddings(df: pd.DataFrame) -> pd.DataFrame:
     df["day_of_week"] = ts.dt.dayofweek
     df["month"] = ts.dt.month
     df["day_of_year"] = ts.dt.dayofyear
-    df["week_of_year"] = ts.dt.isocalendar().week.astype(int)
-    df["is_weekend"] = (ts.dt.dayofweek >= 5).astype(int)
-    df["is_rush_hour"] = (
+    df["week_of_year"] = ts.dt.isocalendar().week.astype("int64")
+    df["is_weekend"] = (ts.dt.dayofweek >= 5).astype("int64")
+    df["is_rush_hour"] = (  # Explicitly cast to int64 for Hopsworks 'bigint'
         ((ts.dt.hour >= 7) & (ts.dt.hour <= 9))
         | ((ts.dt.hour >= 17) & (ts.dt.hour <= 20))
     ).astype(int)
@@ -181,6 +183,12 @@ def build_feature_frame(raw: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = raw.sort_values("timestamp").reset_index(drop=True)
+
+    # Impute missing values with ffill/bfill to prevent massive data loss from dropna()
+    # on older historical data that may have gaps.
+    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    df[numeric_cols] = df[numeric_cols].ffill().bfill()
+    logger.info("Imputed missing values in raw data using ffill/bfill.")
 
     df = add_temporal_embeddings(df)
     df = add_lag_features(df)
