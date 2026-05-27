@@ -13,34 +13,34 @@
 
 ## Requirements Checklist ✅
 
-| Requirement | Implementation | Status |
-|-------------|----------------|--------|
-| Python | Python 3.11 throughout | ✅ |
-| Scikit-learn | Ridge, RandomForest in `training/train.py` | ✅ |
-| TensorFlow | 2-layer Keras LSTM in `training/train.py` | ✅ |
-| Hopsworks / Vertex AI | Hopsworks Cloud + Parquet fallback | ✅ |
-| GitHub Actions / Airflow | 3 workflows in `.github/workflows/` | ✅ |
-| Streamlit | `app/dashboard.py` — 4-page interactive dashboard | ✅ |
-| Flask / FastAPI | FastAPI `app/main.py` — `/health`, `/forecast`, `/predict` | ✅ |
-| AQICN / OpenWeather API | **Open-Meteo** (free, no key — explicitly allowed by brief) | ✅ |
-| SHAP | SHAP beeswarm + bar in `training/evaluate.py` | ✅ |
-| LIME | LIME local explanation in `training/evaluate.py` | ✅ |
-| Git | GitHub repository + Actions | ✅ |
-| Feature pipeline | `features/ingest_hourly.py` + `feature_engineering.py` | ✅ |
-| Historical backfill | `features/backfill_historical.py` (30 days real data) | ✅ |
-| Feature store storage | Hopsworks Feature Group / local `.local_fs/*.parquet` | ✅ |
-| Time-based features | Hour, day, month sin/cos embeddings | ✅ |
-| Derived features (AQI rate) | AQI change rate over 3h/6h/12h/24h | ✅ |
-| 100+ feature columns | **173 engineered features** produced | ✅ |
-| RMSE, MAE, R² metrics | All 3 logged per model | ✅ |
-| Model Registry | `models/` + `artifacts/leaderboard.json` + Hopsworks MR | ✅ |
-| Hourly CI/CD | `feature_pipeline.yml` — runs `ingest_hourly` | ✅ |
-| Daily CI/CD | `training_pipeline.yml` — trains all models | ✅ |
-| 3-day forecast dashboard | Streamlit page 1 — live 72h timeline | ✅ |
-| EDA | `data/eda_notebook_scaffold.py` — 5 chart types | ✅ |
-| Hazardous AQI alerts | Red/yellow banners when forecast > threshold | ✅ |
-| Multiple model types | Ridge (statistical) + RF + XGBoost (tree) + LSTM (deep learning) | ✅ |
-| Data leakage prevention | Time-ordered split, scaler fit on train only | ✅ |
+| Requirement                 | Implementation                                                   | Status |
+| --------------------------- | ---------------------------------------------------------------- | ------ |
+| Python                      | Python 3.11 throughout                                           | ✅     |
+| Scikit-learn                | Ridge, RandomForest in `training/train.py`                       | ✅     |
+| TensorFlow                  | 2-layer Keras LSTM in `training/train.py`                        | ✅     |
+| Hopsworks / Vertex AI       | Hopsworks Cloud + Parquet fallback                               | ✅     |
+| GitHub Actions / Airflow    | 3 workflows in `.github/workflows/`                              | ✅     |
+| Streamlit                   | `app/dashboard.py` — 4-page interactive dashboard                | ✅     |
+| Flask / FastAPI             | FastAPI `app/main.py` — `/health`, `/forecast`, `/predict`       | ✅     |
+| AQICN / OpenWeather API     | **Open-Meteo** (free, no key — explicitly allowed by brief)      | ✅     |
+| SHAP                        | SHAP beeswarm + bar in `training/evaluate.py`                    | ✅     |
+| LIME                        | LIME local explanation in `training/evaluate.py`                 | ✅     |
+| Git                         | GitHub repository + Actions                                      | ✅     |
+| Feature pipeline            | `features/ingest_hourly.py` + `feature_engineering.py`           | ✅     |
+| Historical backfill         | `features/backfill_historical.py` (30 days real data)            | ✅     |
+| Feature store storage       | Hopsworks Feature Group / local `.local_fs/*.parquet`            | ✅     |
+| Time-based features         | Hour, day, month sin/cos embeddings                              | ✅     |
+| Derived features (AQI rate) | AQI change rate over 3h/6h/12h/24h                               | ✅     |
+| 100+ feature columns        | **173 engineered features** produced                             | ✅     |
+| RMSE, MAE, R² metrics       | All 3 logged per model                                           | ✅     |
+| Model Registry              | `models/` + `artifacts/leaderboard.json` + Hopsworks MR          | ✅     |
+| Hourly CI/CD                | `feature_pipeline.yml` — runs `ingest_hourly`                    | ✅     |
+| Daily CI/CD                 | `training_pipeline.yml` — trains all models                      | ✅     |
+| 3-day forecast dashboard    | Streamlit page 1 — live 72h timeline                             | ✅     |
+| EDA                         | `data/eda_notebook_scaffold.py` — 5 chart types                  | ✅     |
+| Hazardous AQI alerts        | Red/yellow banners when forecast > threshold                     | ✅     |
+| Multiple model types        | Ridge (statistical) + RF + XGBoost (tree) + LSTM (deep learning) | ✅     |
+| Data leakage prevention     | Time-ordered split, scaler fit on train only                     | ✅     |
 
 ---
 
@@ -65,7 +65,7 @@ features/feature_engineering.py
         │       [173 total feature columns]
         ▼
 features/feature_store.py
-  ├─ PRIMARY: Hopsworks Cloud Feature Group (when HOPSWORKS_API_KEY is set)
+  ├─ PRIMARY: Hopsworks Cloud Feature Group v2 (when HOPSWORKS_API_KEY is set)
   └─ FALLBACK: .local_fs/aqi_features_v2.parquet
         │
         ▼
@@ -97,6 +97,7 @@ app/main.py (FastAPI :8000)      app/dashboard.py (Streamlit :8501)
 ### Step 1 — Clone or copy the project
 
 **Option A — GitHub clone (after you push):**
+
 ```powershell
 git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
 cd YOUR_REPO
@@ -174,6 +175,7 @@ HOPSWORKS_PROJECT=AQI_Predictor_Hyderabad
 > will be stored locally in `.local_fs/`. No Hopsworks account needed.
 >
 > Add this to your `.env`:
+>
 > ```
 > FEATURE_STORE_MODE=parquet
 > ```
@@ -208,18 +210,21 @@ python -m data.eda_notebook_scaffold
 Open **two PowerShell terminals**, both with `.venv` activated:
 
 **Terminal 1 — FastAPI backend:**
+
 ```powershell
 $env:PYTHONUTF8 = "1"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Terminal 2 — Streamlit dashboard:**
+
 ```powershell
 $env:PYTHONUTF8 = "1"
 python -m streamlit run app/dashboard.py
 ```
 
 Then open your browser:
+
 - **Dashboard:** http://localhost:8501
 - **API docs:** http://localhost:8000/docs
 - **API health:** http://localhost:8000/health
@@ -242,6 +247,7 @@ python -c "import pathlib; a=pathlib.Path('artifacts'); [print('OK:', f.name) fo
 ```
 
 **Expected output:**
+
 ```
 Feature store: ~578 rows x 175 columns
 Champion: lstm
@@ -284,10 +290,10 @@ Go to your repo → **Settings** → **Secrets and variables** → **Actions** �
 
 Add these two secrets:
 
-| Secret name | Value |
-|-------------|-------|
+| Secret name         | Value                              |
+| ------------------- | ---------------------------------- |
 | `HOPSWORKS_API_KEY` | Your Hopsworks API key from Step 5 |
-| `HOPSWORKS_PROJECT` | `AQI_Predictor_Hyderabad` |
+| `HOPSWORKS_PROJECT` | `AQI_Predictor_Hyderabad`          |
 
 > If you're using Parquet fallback (no Hopsworks), skip this step —
 > the workflows will automatically use local Parquet storage.
@@ -307,14 +313,14 @@ Add these two secrets:
 Copy and paste this into VS Code Claude (or any AI assistant) to verify your local setup is complete and correct:
 
 ```
-I have a Python MLOps project called "Pearls AQI Predictor". 
+I have a Python MLOps project called "Pearls AQI Predictor".
 Please check the following and tell me if anything is missing or broken:
 
 1. Check that a Python 3.11 virtual environment (.venv) exists and is activated
-2. Verify requirements.txt packages are all installed: run `pip list` and check for 
-   pandas, numpy, scikit-learn, xgboost, tensorflow, shap, lime, streamlit, fastapi, 
+2. Verify requirements.txt packages are all installed: run `pip list` and check for
+   pandas, numpy, scikit-learn, xgboost, tensorflow, shap, lime, streamlit, fastapi,
    uvicorn, plotly, hopsworks, pyarrow
-3. Check that .env file exists (not .env.example) and has HOPSWORKS_API_KEY set 
+3. Check that .env file exists (not .env.example) and has HOPSWORKS_API_KEY set
    (or FEATURE_STORE_MODE=parquet if skipping Hopsworks)
 4. Run `python -m features.backfill_historical` and confirm it completes without errors
 5. Run `python -m training.train` and confirm all 4 models train (Ridge, RF, XGBoost, LSTM)
@@ -389,7 +395,8 @@ Python 3.11 exactly. TensorFlow 2.16 does not yet support 3.12/3.13 on Windows.
 **Q: The Streamlit dashboard shows "DEMO" instead of real predictions?**  
 This means the FastAPI backend isn't running. Start it first with `uvicorn app.main:app --host 0.0.0.0 --port 8000`, then refresh the dashboard.
 
-**Q: How do I reset everything and start fresh?**  
+**Q: How do I reset everything and start fresh?**
+
 ```powershell
 Remove-Item -Recurse -Force .local_fs, models, artifacts
 python -m features.backfill_historical
@@ -402,32 +409,32 @@ python -m data.eda_notebook_scaffold
 
 ## Model Performance (latest run)
 
-| Model | RMSE ↓ | MAE | R² |
-|-------|--------|-----|-----|
+| Model                | RMSE ↓   | MAE  | R²    |
+| -------------------- | -------- | ---- | ----- |
 | **LSTM** ⭐ Champion | **6.54** | 6.01 | -0.33 |
-| Random Forest | 7.39 | 5.64 | -0.24 |
-| XGBoost | 7.75 | 6.06 | -0.37 |
-| Ridge | 8.99 | 7.96 | -0.84 |
+| Random Forest        | 7.39     | 5.64 | -0.24 |
+| XGBoost              | 7.75     | 6.06 | -0.37 |
+| Ridge                | 8.99     | 7.96 | -0.84 |
 
-*Evaluated on a time-ordered 20% holdout — no data leakage.*
+_Evaluated on a time-ordered 20% holdout — no data leakage._
 
 ---
 
 ## Technology Stack Summary
 
-| Tool | Purpose |
-|------|---------|
-| **Python 3.11** | All pipeline code |
-| **Open-Meteo API** | Live weather + air quality (free, no key) |
-| **Pandas / NumPy** | Feature engineering |
-| **Scikit-learn** | Ridge, RandomForest, StandardScaler, metrics |
-| **XGBoost** | Gradient boosting champion candidate |
-| **TensorFlow / Keras** | LSTM deep learning model |
-| **SHAP** | Global feature importance |
-| **LIME** | Local instance explanation |
-| **Hopsworks** | Cloud Feature Store + Model Registry |
-| **FastAPI + Uvicorn** | Inference REST API |
-| **Streamlit** | Interactive dashboard |
-| **Plotly** | Interactive charts |
-| **GitHub Actions** | Hourly + daily CI/CD pipelines |
-| **PyArrow** | Parquet feature store fallback |
+| Tool                   | Purpose                                      |
+| ---------------------- | -------------------------------------------- |
+| **Python 3.11**        | All pipeline code                            |
+| **Open-Meteo API**     | Live weather + air quality (free, no key)    |
+| **Pandas / NumPy**     | Feature engineering                          |
+| **Scikit-learn**       | Ridge, RandomForest, StandardScaler, metrics |
+| **XGBoost**            | Gradient boosting champion candidate         |
+| **TensorFlow / Keras** | LSTM deep learning model                     |
+| **SHAP**               | Global feature importance                    |
+| **LIME**               | Local instance explanation                   |
+| **Hopsworks**          | Cloud Feature Store + Model Registry         |
+| **FastAPI + Uvicorn**  | Inference REST API                           |
+| **Streamlit**          | Interactive dashboard                        |
+| **Plotly**             | Interactive charts                           |
+| **GitHub Actions**     | Hourly + daily CI/CD pipelines               |
+| **PyArrow**            | Parquet feature store fallback               |

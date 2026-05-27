@@ -85,7 +85,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             fs = project.get_feature_store()
             fg = fs.get_or_create_feature_group(
                 name=cfg["feature_group_name"],
-                version=cfg["feature_group_version"],
+                version=2,  # Use v2 to allow new schema with lookahead features
                 primary_key=["timestamp"],
                 event_time="timestamp",
                 online_enabled=False,
@@ -96,7 +96,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             )
             logger.info(
                 "Pushing %d rows to Hopsworks FG '%s' v%d.",
-                len(df), cfg["feature_group_name"], cfg["feature_group_version"],
+                len(df), cfg["feature_group_name"], 2,
             )
             # --- Begin verbose debug logs for GitHub Actions ---
             print("--- DEBUG LOGS ---")
@@ -108,7 +108,7 @@ def push_to_store(df: pd.DataFrame) -> None:
             fg.insert(df, write_options={"wait_for_job": False})
             logger.info(
                 "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
-                cfg["feature_group_name"], cfg["feature_group_version"], len(df),
+                cfg["feature_group_name"], 2, len(df),
             )
         except Exception as exc:
             if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
@@ -150,14 +150,14 @@ def load_features() -> pd.DataFrame:
             fs = project.get_feature_store()
             try:
                 fv = fs.get_feature_view(
-                    name=cfg["feature_group_name"] + "_view", version=cfg["feature_group_version"]
+                    name=cfg["feature_group_name"] + "_view", version=2
                 )
                 df = fv.training_data(description="daily training pull")[0]
                 logger.info("Loaded %d rows from Hopsworks Feature View.", len(df))
                 return df
             except Exception:
                 fg = fs.get_feature_group(
-                    name=cfg["feature_group_name"], version=cfg["feature_group_version"]
+                    name=cfg["feature_group_name"], version=2
                 )
                 df = fg.read()
                 logger.info("Loaded %d rows from Hopsworks Feature Group.", len(df))
