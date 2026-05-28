@@ -1,7 +1,7 @@
 """
 Historical backfill pipeline.
 
-Fetches 30 days of merged Open-Meteo weather + air quality data for
+Fetches two years of merged Open-Meteo weather + air quality data for
 Hyderabad, Pakistan, runs the full feature engineering pipeline, and
 provisions the Hopsworks Feature Group (or Parquet fallback) with the result.
 

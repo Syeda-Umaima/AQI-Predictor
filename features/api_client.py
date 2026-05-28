@@ -61,6 +61,13 @@ class OpenMeteoClient:
             "timezone": "UTC",
         }
 
+    def _chunked_date_ranges(self, start, end, chunk_days: int):
+        current = start
+        while current <= end:
+            chunk_end = min(current + timedelta(days=chunk_days - 1), end)
+            yield current, chunk_end
+            current = chunk_end + timedelta(days=1)
+
     # -------------------------------------------------------- Weather
     def _parse_hourly(self, data: dict, extra_rename: dict | None = None) -> pd.DataFrame:
         hourly = data.get("hourly", {})
@@ -116,6 +123,17 @@ class OpenMeteoClient:
         data = self._get(self._om["air_quality_url"], params)
         return self._parse_hourly(data)
 
+    def fetch_air_quality_archive(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch historical hourly air quality using explicit start/end dates."""
+        params = {
+            **self._base_params(),
+            "hourly": ",".join(self._om["air_quality_hourly_vars"]),
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        data = self._get(self._om["air_quality_url"], params)
+        return self._parse_hourly(data)
+
     # -------------------------------------------------------- Combined
     def fetch_combined_forecast(self, forecast_days: int = 4) -> pd.DataFrame:
         """Merge weather + air quality into one hourly DataFrame."""
@@ -133,11 +151,47 @@ class OpenMeteoClient:
     def fetch_combined_historical(self, days: int = 30) -> pd.DataFrame:
         """Fetch `days` of merged historical weather + air quality."""
         end = datetime.now(tz=timezone.utc).date()
-        start = end - timedelta(days=days)
-        weather = self.fetch_weather_archive(
-            start_date=start.isoformat(), end_date=end.isoformat()
+        start = end - timedelta(days=max(days - 1, 0))
+        chunk_days = self._cfg.get("backfill", {}).get("chunk_days", days)
+
+        weather_frames = []
+        for chunk_start, chunk_end in self._chunked_date_ranges(start, end, chunk_days):
+            weather_frames.append(
+                self.fetch_weather_archive(
+                    start_date=chunk_start.isoformat(),
+                    end_date=chunk_end.isoformat(),
+                )
+            )
+        weather = (
+            pd.concat(weather_frames, ignore_index=True)
+            .drop_duplicates("timestamp")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
         )
-        aq = self.fetch_air_quality_past(past_days=min(days, 92))
+
+        air_quality_frames = []
+        try:
+            for chunk_start, chunk_end in self._chunked_date_ranges(start, end, chunk_days):
+                air_quality_frames.append(
+                    self.fetch_air_quality_archive(
+                        start_date=chunk_start.isoformat(),
+                        end_date=chunk_end.isoformat(),
+                    )
+                )
+            aq = (
+                pd.concat(air_quality_frames, ignore_index=True)
+                .drop_duplicates("timestamp")
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+        except Exception as exc:
+            logger.warning(
+                "Air-quality archive request failed, falling back to %s days of recent AQ data: %s",
+                min(days, 92),
+                exc,
+            )
+            aq = self.fetch_air_quality_past(past_days=min(days, 92))
+
         if weather.empty and aq.empty:
             return pd.DataFrame()
         if weather.empty:

@@ -30,9 +30,9 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 import lightgbm as lgb
@@ -93,19 +93,24 @@ def score(y_true, y_pred) -> dict:
 def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
                X_test: pd.DataFrame, y_test: pd.Series) -> dict:
     """
-    Keras LSTM on a sliding 24h window.
+    Keras LSTM on a sliding 72h window.
     Scaler fit on training data only — test data transformed with train scaler.
     """
-    import tensorflow as tf  # type: ignore
-    from tensorflow.keras import layers, models  # type: ignore
+    import tensorflow as tf
+    import numpy as np
+    np.random.seed(42)
+    tf.random.set_seed(42)
+    from tensorflow.keras import layers, models
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
-    cfg = _cfg()["training"]["lstm"]
-    scaler = StandardScaler().fit(X_train)
+    feature_scaler = StandardScaler().fit(X_train)
+    target_scaler = StandardScaler().fit(y_train.values.reshape(-1, 1))
 
-    seq_len = 24  # Fix: Hardcode sequence length to prevent config error
+    seq_len = 24  # Fix: 24h lookback for 72h ahead AQI forecasting
 
-    Xtr = scaler.transform(X_train)
-    Xte = scaler.transform(X_test)
+    Xtr = feature_scaler.transform(X_train)
+    Xte = feature_scaler.transform(X_test)
+    ytr_scaled = target_scaler.transform(y_train.values.reshape(-1, 1))
 
     def to_sequences(X: np.ndarray, y):
         xs, ys = [], []
@@ -115,7 +120,7 @@ def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
             ys.append(y_arr[i])
         return np.array(xs), np.array(ys)
 
-    Xtr_seq, ytr_seq = to_sequences(Xtr, y_train.reset_index(drop=True))
+    Xtr_seq, ytr_seq_scaled = to_sequences(Xtr, pd.Series(ytr_scaled.ravel()))
     Xte_seq, yte_seq = to_sequences(Xte, y_test.reset_index(drop=True))
 
     if len(Xtr_seq) < 10:
@@ -123,23 +128,34 @@ def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
 
     model = models.Sequential([
         layers.Input(shape=(seq_len, Xtr.shape[1])),
-        layers.LSTM(64, return_sequences=True),
-        layers.Dropout(0.2),
-        layers.LSTM(32, return_sequences=False),
-        layers.Dropout(0.2),
+        layers.LSTM(128, return_sequences=True),
+        layers.LSTM(64, return_sequences=False),
         layers.Dense(32, activation="relu"),
         layers.Dense(1),
     ])
-    model.compile(optimizer="adam", loss="mse")
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
+    
+    early_stopping = EarlyStopping(monitor='val_loss', patience=12, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=6,
+        min_lr=1e-5,
+        verbose=1,
+    )
+    
     model.fit(
-        Xtr_seq, ytr_seq, # type: ignore
-        epochs=cfg["epochs"],
-        batch_size=cfg["batch_size"],
+        Xtr_seq, ytr_seq_scaled,
+        epochs=100,
+        batch_size=16,
         validation_split=0.1,
         verbose=0,
+        callbacks=[early_stopping, reduce_lr],
     )
-    preds = model.predict(Xte_seq, verbose=0).ravel()
-    return {"model": model, "scaler": scaler, "metrics": score(yte_seq, preds)}
+    preds_scaled = model.predict(Xte_seq, verbose=0)
+    preds = target_scaler.inverse_transform(preds_scaled).ravel().flatten()
+    yte_seq_flat = np.asarray(yte_seq).ravel().flatten()
+    return {"model": model, "scaler": feature_scaler, "metrics": score(yte_seq_flat, preds)}
 
 
 # ---------------------------------------------------------------- Champion
@@ -156,7 +172,7 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
 
     if champ_name == "lstm":
         champ["model"].save(MODELS_DIR / "champion_lstm.keras")
-        joblib.dump(champ["scaler"], MODELS_DIR / "champion_scaler.joblib")
+        joblib.dump(champ.get("scaler"), MODELS_DIR / "champion_scaler.joblib")
     else:
         artifact = {"model": champ["model"], "scaler": champ.get("scaler")}
         joblib.dump(artifact, MODELS_DIR / "champion.joblib")
@@ -241,7 +257,66 @@ def main() -> None:
     cols = feature_columns(df)
     train_df, test_df = time_ordered_split(df, cfg["test_size"])
 
-    # 5. Final training on full feature set
+    # 5. Define direct-fit models with robust hyperparameters for our small wide time-series dataset
+    model_configs = {
+        "ridge": {
+            "estimator": TransformedTargetRegressor(
+                regressor=Ridge(alpha=10.0),
+                func=np.log1p,
+                inverse_func=np.expm1,
+            ),
+            "use_scaler": True,
+        },
+        "random_forest": {
+            "estimator": TransformedTargetRegressor(
+                regressor=RandomForestRegressor(
+                    n_estimators=150,
+                    max_depth=5,
+                    max_features='sqrt',
+                    random_state=42,
+                    n_jobs=-1,
+                ),
+                func=np.log1p,
+                inverse_func=np.expm1,
+            ),
+            "use_scaler": False,
+        },
+        "xgboost": {
+            "estimator": TransformedTargetRegressor(
+                regressor=XGBRegressor(
+                    n_estimators=150,
+                    learning_rate=0.05,
+                    max_depth=4,
+                    subsample=0.8,
+                    colsample_bytree=0.4,
+                    random_state=42,
+                    n_jobs=-1,
+                    verbosity=0,
+                ),
+                func=np.log1p,
+                inverse_func=np.expm1,
+            ),
+            "use_scaler": False,
+        },
+        "lightgbm": {
+            "estimator": TransformedTargetRegressor(
+                regressor=lgb.LGBMRegressor(
+                    n_estimators=150,
+                    learning_rate=0.05,
+                    max_depth=4,
+                    subsample=0.8,
+                    colsample_bytree=0.4,
+                    random_state=42,
+                    n_jobs=-1,
+                ),
+                func=np.log1p,
+                inverse_func=np.expm1,
+            ),
+            "use_scaler": False,
+        }
+    }
+
+    # 6. Final training on full feature set
     logger.info(
         "Split: %d train rows / %d test rows / %d feature columns.",
         len(train_df), len(test_df), len(cols),
@@ -250,43 +325,8 @@ def main() -> None:
     X_train, y_train = train_df[cols], train_df[TARGET]
     X_test, y_test = test_df[cols], test_df[TARGET]
 
-    # 6. Simplified Model Training & Evaluation Loop
+    # 7. Model Training & Evaluation Loop
     leaderboard: dict = {}
-    tscv = TimeSeriesSplit(n_splits=3)
-
-    model_configs = {
-        "ridge": {
-            "estimator": Ridge(),
-            "params": {"alpha": [0.1, 1.0, 10.0]},
-            "use_scaler": True,
-        },
-        "random_forest": {
-            "estimator": RandomForestRegressor(random_state=42, n_jobs=-1),
-            "params": {
-                "n_estimators": [100, 200, 300], "max_depth": [5, 10, 15, None],
-                "min_samples_split": [2, 5, 10], "min_samples_leaf": [1, 2, 4],
-                "max_features": ["sqrt", "log2", 1.0],
-            },
-            "use_scaler": False,
-        },
-        "xgboost": {
-            "estimator": XGBRegressor(random_state=42, n_jobs=-1, verbosity=0),
-            "params": {
-                "n_estimators": [200, 400, 600], "max_depth": [3, 5, 7],
-                "learning_rate": [0.01, 0.05, 0.1], "subsample": [0.8, 0.9, 1.0],
-                "colsample_bytree": [0.7, 0.9, 1.0], "min_child_weight": [1, 3, 5],
-            },
-            "use_scaler": False,
-        },
-        "lightgbm": {
-            "estimator": lgb.LGBMRegressor(random_state=42, n_jobs=-1),
-            "params": {
-                "n_estimators": [100, 300, 500], "learning_rate": [0.01, 0.05, 0.1],
-                "max_depth": [3, 7, -1], "num_leaves": [15, 31, 63],
-            },
-            "use_scaler": False,
-        }
-    }
 
     for name, config in model_configs.items():
         logger.info("Training %s ...", name)
@@ -296,25 +336,16 @@ def main() -> None:
         X_train_final = scaler.transform(X_train) if scaler else X_train
         X_test_final = scaler.transform(X_test) if scaler else X_test
 
-        # B. Tune model
-        search = RandomizedSearchCV(
-            estimator=config["estimator"],
-            param_distributions=config["params"],
-            n_iter=15 if name != "ridge" else 3,
-            cv=tscv,
-            scoring="neg_root_mean_squared_error",
-            random_state=42,
-            n_jobs=-1,
-        )
-        search.fit(X_train_final, y_train)
-        
+        # B. Direct fit on the full training split
+        model = config["estimator"]
+        model.fit(X_train_final, y_train)
+
         # C. Predict and score
-        best_model = search.best_estimator_
-        y_pred = best_model.predict(X_test_final)
+        y_pred = model.predict(X_test_final)
         metrics = score(y_test, y_pred)
-        
+
         # D. Store results
-        leaderboard[name] = {"model": best_model, "scaler": scaler, "metrics": metrics}
+        leaderboard[name] = {"model": model, "scaler": scaler, "metrics": metrics}
 
     try:
         leaderboard["lstm"] = train_lstm(X_train, y_train, X_test, y_test)
