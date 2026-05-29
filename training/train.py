@@ -21,23 +21,28 @@ Outputs:
 """
 from __future__ import annotations
 
+import certifi
 import json
 import logging
 from pathlib import Path
+import io
+import os
+import ssl
+import datetime
 
+import gridfs
 import joblib
 import numpy as np
 import pandas as pd
 import yaml
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.compose import TransformedTargetRegressor
+from dotenv import load_dotenv
+from pymongo import MongoClient
+from sklearn.ensemble import RandomForestRegressor, VotingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 import lightgbm as lgb
-
-from features.feature_store import load_features
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +51,11 @@ MODELS_DIR = ROOT / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 ARTIFACTS = ROOT / "artifacts"
 ARTIFACTS.mkdir(exist_ok=True)
+load_dotenv(dotenv_path=ROOT / ".env", override=False)
+
+MONGO_DB = "aqi_predictor"
+FEATURE_COLLECTION = "features_v2"
+MODEL_METADATA_COLLECTION = "model_metadata"
 
 TARGET = "target_aqi_next_72h"
 
@@ -55,9 +65,33 @@ def _cfg() -> dict:
         return yaml.safe_load(f)
 
 
-# ---------------------------------------------------------------- Data layer
+def _mongo_client() -> MongoClient:
+    uri = os.getenv("MONGO_URI", "").strip()
+    if not uri:
+        raise RuntimeError("MONGO_URI is required in .env for training pipeline.")
+
+    ca = certifi.where()
+    client = MongoClient(
+        uri,
+        tls=True,
+        tlsCAFile=ca,
+        tlsInsecure=True,
+        serverSelectionTimeoutMS=10000,
+    )
+    client.admin.command("ping")
+    return client
+
+
 def load_training_frame() -> pd.DataFrame:
-    return load_features()
+    client = _mongo_client()
+    collection = client[MONGO_DB][FEATURE_COLLECTION]
+    rows = list(collection.find())
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+    return df
 
 
 def time_ordered_split(df: pd.DataFrame, test_size: float):
@@ -161,6 +195,14 @@ def train_lstm(X_train: pd.DataFrame, y_train: pd.Series,
 # ---------------------------------------------------------------- Champion
 def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     champ_name = min(leaderboard, key=lambda k: leaderboard[k]["metrics"]["rmse"])
+    if "ensemble" in leaderboard and "xgboost" in leaderboard:
+        if leaderboard["ensemble"]["metrics"]["r2"] > leaderboard["xgboost"]["metrics"]["r2"]:
+            champ_name = "ensemble"
+            logger.info(
+                "Ensemble selected as champion because its R² (%.4f) exceeds XGBoost R² (%.4f).",
+                leaderboard["ensemble"]["metrics"]["r2"],
+                leaderboard["xgboost"]["metrics"]["r2"],
+            )
     champ = leaderboard[champ_name]
     logger.info(
         "Champion: %s  (RMSE=%.4f, MAE=%.4f, R²=%.4f)",
@@ -173,8 +215,13 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     if champ_name == "lstm":
         champ["model"].save(MODELS_DIR / "champion_lstm.keras")
         joblib.dump(champ.get("scaler"), MODELS_DIR / "champion_scaler.joblib")
+        artifact = {
+            "model": champ["model"],
+            "scaler": champ.get("scaler"),
+            "type": "lstm",
+        }
     else:
-        artifact = {"model": champ["model"], "scaler": champ.get("scaler")}
+        artifact = {"model": champ["model"], "scaler": champ.get("scaler"), "type": champ_name}
         joblib.dump(artifact, MODELS_DIR / "champion.joblib")
 
     meta = {
@@ -182,34 +229,35 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
         "metrics": champ["metrics"],
         "feature_columns": feature_cols,
         "leaderboard": {k: v["metrics"] for k, v in leaderboard.items()},
+        "timestamp": datetime.datetime.utcnow(),
     }
     (ARTIFACTS / "leaderboard.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(meta, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
     )
     logger.info("Saved leaderboard to %s", ARTIFACTS / "leaderboard.json")
 
-    try:
-        import os
-        api_key = os.getenv("HOPSWORKS_API_KEY")
-        if api_key:
-            import hopsworks  # type: ignore
-            cfg = _cfg()["hopsworks"]
-            project_name = os.getenv("HOPSWORKS_PROJECT", cfg["project"])
-            project = hopsworks.login(
-                project=project_name,
-                api_key_value=api_key,
-                host="eu-west.cloud.hopsworks.ai",
-            )
-            mr = project.get_model_registry()
-            registered = mr.python.create_model(
-                name=cfg["model_registry_name"],
-                metrics=champ["metrics"],
-                description=f"Champion AQI model ({champ_name})",
-            )
-            registered.save(str(MODELS_DIR))
-            logger.info("Champion registered in Hopsworks Model Registry.")
-    except Exception as exc:
-        logger.warning("Model Registry push skipped (%s) — local copy kept in %s.", exc, MODELS_DIR)
+    db = _mongo_client()[MONGO_DB]
+    fs = gridfs.GridFS(db)
+    buffer = io.BytesIO()
+    joblib.dump(artifact, buffer)
+    buffer.seek(0)
+    file_id = fs.put(
+        buffer.getvalue(),
+        filename=f"champion_{champ_name}.joblib",
+        champion=champ_name,
+        timestamp=meta["timestamp"],
+    )
+
+    metadata_doc = {
+        "champion": champ_name,
+        "metrics": champ["metrics"],
+        "leaderboard": meta["leaderboard"],
+        "feature_columns": feature_cols,
+        "file_id": file_id,
+        "timestamp": meta["timestamp"],
+    }
+    db[MODEL_METADATA_COLLECTION].insert_one(metadata_doc)
+    logger.info("Saved champion metadata to MongoDB model_metadata collection.")
 
     return champ_name
 
@@ -260,59 +308,54 @@ def main() -> None:
     # 5. Define direct-fit models with robust hyperparameters for our small wide time-series dataset
     model_configs = {
         "ridge": {
-            "estimator": TransformedTargetRegressor(
-                regressor=Ridge(alpha=10.0),
-                func=np.log1p,
-                inverse_func=np.expm1,
-            ),
+            "estimator": Ridge(alpha=10.0),
             "use_scaler": True,
+            "log_target": True,
+            "inverse_transform": True,
         },
         "random_forest": {
-            "estimator": TransformedTargetRegressor(
-                regressor=RandomForestRegressor(
-                    n_estimators=150,
-                    max_depth=5,
-                    max_features='sqrt',
-                    random_state=42,
-                    n_jobs=-1,
-                ),
-                func=np.log1p,
-                inverse_func=np.expm1,
+            "estimator": RandomForestRegressor(
+                n_estimators=150,
+                max_depth=5,
+                max_features='sqrt',
+                random_state=42,
+                n_jobs=-1,
             ),
             "use_scaler": False,
+            "log_target": True,
+            "inverse_transform": True,
         },
         "xgboost": {
-            "estimator": TransformedTargetRegressor(
-                regressor=XGBRegressor(
-                    n_estimators=150,
-                    learning_rate=0.05,
-                    max_depth=4,
-                    subsample=0.8,
-                    colsample_bytree=0.4,
-                    random_state=42,
-                    n_jobs=-1,
-                    verbosity=0,
-                ),
-                func=np.log1p,
-                inverse_func=np.expm1,
+            "estimator": XGBRegressor(
+                n_estimators=300,
+                learning_rate=0.03,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.4,
+                reg_alpha=0.1,
+                reg_lambda=1.0,
+                random_state=42,
+                n_jobs=-1,
+                verbosity=0,
             ),
             "use_scaler": False,
+            "log_target": True,
+            "inverse_transform": True,
         },
         "lightgbm": {
-            "estimator": TransformedTargetRegressor(
-                regressor=lgb.LGBMRegressor(
-                    n_estimators=150,
-                    learning_rate=0.05,
-                    max_depth=4,
-                    subsample=0.8,
-                    colsample_bytree=0.4,
-                    random_state=42,
-                    n_jobs=-1,
-                ),
-                func=np.log1p,
-                inverse_func=np.expm1,
+            "estimator": lgb.LGBMRegressor(
+                n_estimators=300,
+                learning_rate=0.03,
+                max_depth=6,
+                num_leaves=31,
+                subsample=0.8,
+                colsample_bytree=0.4,
+                random_state=42,
+                n_jobs=-1,
             ),
             "use_scaler": False,
+            "log_target": True,
+            "inverse_transform": True,
         }
     }
 
@@ -336,19 +379,46 @@ def main() -> None:
         X_train_final = scaler.transform(X_train) if scaler else X_train
         X_test_final = scaler.transform(X_test) if scaler else X_test
 
-        # B. Direct fit on the full training split
+        # B. Train on logged target for tree-based models and ridge
+        y_train_target = np.log1p(y_train) if config.get("log_target", False) else y_train
         model = config["estimator"]
-        model.fit(X_train_final, y_train)
+        model.fit(X_train_final, y_train_target)
 
-        # C. Predict and score
+        # C. Predict and score on raw AQI scale
         y_pred = model.predict(X_test_final)
+        if config.get("inverse_transform", False):
+            y_pred = np.expm1(y_pred)
         metrics = score(y_test, y_pred)
 
         # D. Store results
         leaderboard[name] = {"model": model, "scaler": scaler, "metrics": metrics}
 
+    if all(name in leaderboard for name in ("xgboost", "lightgbm", "random_forest")):
+        try:
+            logger.info("Training ensemble of xgboost + lightgbm + random_forest ...")
+            ensemble = VotingRegressor(estimators=[
+                ("xgb", leaderboard["xgboost"]["model"]),
+                ("lgb", leaderboard["lightgbm"]["model"]),
+                ("rf", leaderboard["random_forest"]["model"]),
+            ])
+            ensemble.fit(X_train, np.log1p(y_train))
+            ensemble_preds = np.expm1(ensemble.predict(X_test))
+            ensemble_metrics = score(y_test, ensemble_preds)
+            leaderboard["ensemble"] = {"model": ensemble, "scaler": None, "metrics": ensemble_metrics}
+            logger.info(
+                "Ensemble metrics: RMSE=%.4f, MAE=%.4f, R²=%.4f",
+                ensemble_metrics["rmse"], ensemble_metrics["mae"], ensemble_metrics["r2"],
+            )
+        except Exception as exc:
+            logger.warning("Ensemble training skipped: %s", exc)
+
     try:
-        leaderboard["lstm"] = train_lstm(X_train, y_train, X_test, y_test)
+        leaderboard["lstm"] = train_lstm(
+            X_train.copy(deep=True),
+            y_train.copy(),
+            X_test.copy(deep=True),
+            y_test.copy(),
+        )
     except Exception as exc:
         logger.warning("LSTM training skipped: %s", exc)
 

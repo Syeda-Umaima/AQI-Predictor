@@ -1,201 +1,108 @@
 """
-Hopsworks Cloud Feature Store — with local Parquet fallback.
+MongoDB Atlas Feature Store.
 
-Authentication:
-  export HOPSWORKS_API_KEY=<your key>
-  export HOPSWORKS_PROJECT=AQI_Predictor_Hyderabad   # optional, defaults shown
-
-When HOPSWORKS_API_KEY is not set (or FEATURE_STORE_MODE=parquet), the module
-transparently falls back to a local Parquet store under .local_fs/.
-
-Directive 3 compliance:
-  - Zero hardcoded credentials — all secrets come from environment variables.
-  - Real live cloud connections to project AQI_Predictor_Hyderabad.
-  - Backfill pipeline provisions Feature Groups on first run.
-  - Training pipeline pulls from a Hopsworks Training View (Feature View).
+Uses the MongoDB URI configured in .env to read and write feature data.
+This module replaces the old Hopsworks feature-store integration.
 """
 from __future__ import annotations
 
 import logging
 import os
+import ssl
 from pathlib import Path
 
+import certifi
 import pandas as pd
 from dotenv import load_dotenv
-import yaml
+from pymongo import MongoClient
+from pymongo.operations import ReplaceOne
 
 logger = logging.getLogger(__name__)
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
+ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(dotenv_path=ROOT / ".env", override=False)
+
+MONGO_DB = "aqi_predictor"
+MONGO_FEATURE_COLLECTION = "features_v2"
 
 
-def _cfg() -> dict:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _mongo_uri() -> str:
+    uri = os.getenv("MONGO_URI", "").strip()
+    if not uri:
+        raise EnvironmentError("MONGO_URI is required in .env for MongoDB access.")
+    return uri
 
 
-def _parquet_path() -> Path:
-    cfg = _cfg()["hopsworks"]
-    return Path(cfg["parquet_dir"]) / f"{cfg['feature_group_name']}.parquet"
-
-
-def _use_hopsworks() -> bool:
-    store_mode = os.getenv("FEATURE_STORE_MODE", "").lower()
-    api_key = os.getenv("HOPSWORKS_API_KEY", "")
-
-    if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
-        if store_mode == "parquet":
-            raise EnvironmentError(
-                "GitHub Actions must not run with FEATURE_STORE_MODE=parquet for Hopsworks ingestion. "
-                "Set FEATURE_STORE_MODE=cloud or leave it blank."
-            )
-        if not api_key:
-            raise EnvironmentError(
-                "HOPSWORKS_API_KEY is required in GitHub Actions for cloud ingestion. "
-                "Add it as a repository secret and map it in the workflow."
-            )
-
-    if store_mode == "parquet":
-        return False
-    return bool(api_key)
-
-
-def _hopsworks_login():
-    """Authenticate to Hopsworks Cloud using env-var credentials."""
-    import hopsworks  # type: ignore
-    api_key = os.environ["HOPSWORKS_API_KEY"]
-    project_name = os.getenv("HOPSWORKS_PROJECT", _cfg()["hopsworks"]["project"])
-    project = hopsworks.login(
-        project=project_name,
-        api_key_value=api_key,
-        host="eu-west.cloud.hopsworks.ai",
+def _mongo_client() -> MongoClient:
+    uri = _mongo_uri()
+    ca = certifi.where()
+    client = MongoClient(
+        uri,
+        tls=True,
+        tlsCAFile=ca,
+        tlsInsecure=True,
+        serverSelectionTimeoutMS=10000,
     )
-    logger.info("Connected to Hopsworks project: %s", project_name)
-    return project
+    client.admin.command("ping")
+    return client
+
+
+def _mongo_db():
+    return _mongo_client()[MONGO_DB]
+
+
+def _feature_collection():
+    return _mongo_db()[MONGO_FEATURE_COLLECTION]
 
 
 # ---------------------------------------------------------------- Push
 def push_to_store(df: pd.DataFrame) -> None:
-    """Insert engineered features into Hopsworks Feature Group or local Parquet."""
-    cfg = _cfg()["hopsworks"]
-
-    if _use_hopsworks():
-        try:
-            project = _hopsworks_login()
-            fs = project.get_feature_store()
-            fg = fs.get_or_create_feature_group(
-                name=cfg["feature_group_name"],
-                version=5,  # Use v5 for corrected imputation logic
-                primary_key=["timestamp"],
-                event_time="timestamp",
-                online_enabled=False,
-                description=(
-                    "Engineered AQI features for Pearls AQI Predictor — "
-                    "Open-Meteo weather + air quality, 100-200 columns."
-                ),
-            )
-            logger.info(
-                "Pushing %d rows to Hopsworks FG '%s' v%d.",
-                len(df), cfg["feature_group_name"], 5,
-            )
-            # --- Begin verbose debug logs for GitHub Actions ---
-            print("--- DEBUG LOGS ---")
-            print(f"Connected to Project: {project.name}")
-            print(f"Target Feature Group: {fg.name} (version {fg.version})")
-            print(f"DataFrame shape being pushed: {df.shape}")
-            print(f"Sample data: \n{df.head(2)}")
-            # --- End verbose debug logs ---
-            fg.insert(df, write_options={"wait_for_job": False})
-            logger.info(
-                "Hopsworks FG '%s' v%d insert confirmed for %d rows.",
-                cfg["feature_group_name"], 5, len(df),
-            )
-        except Exception as exc:
-            if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
-                logger.error(
-                    "Hopsworks push failed in GitHub Actions (%s) — failing workflow instead of falling back.",
-                    exc,
-                )
-                raise
-            logger.warning("Hopsworks push failed (%s) — writing to local Parquet.", exc)
-            _write_parquet(df, cfg)
-        else:
-            # If Hopsworks push was successful, we still want to update the local cache.
-            # A simple way to distinguish a full backfill from an hourly append
-            # is by the number of rows. Backfills are large.
-            is_backfill = len(df) > 1000  # Heuristic for backfill
-            _write_parquet(df, cfg, overwrite_if_backfill=is_backfill)
+    """Insert engineered features into MongoDB Atlas feature store."""
+    if df.empty:
+        logger.info("No rows to push to MongoDB feature store.")
         return
-    
-    _write_parquet(df, cfg)
 
+    collection = _feature_collection()
+    records = df.copy()
+    if "_id" in records.columns:
+        records = records.drop(columns=["_id"])
 
-def _write_parquet(df: pd.DataFrame, cfg: dict, overwrite_if_backfill: bool = False) -> None:
-    out = _parquet_path()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists() and not overwrite_if_backfill:
-        existing = pd.read_parquet(out)
-        df = (
-            pd.concat([existing, df])
-            .drop_duplicates("timestamp")
-            .sort_values("timestamp")
-        )
-    df.to_parquet(out, index=False)
-    logger.info("Wrote %d rows to local Parquet store at %s.", len(df), out)
+    docs = records.to_dict("records")
+    operations = [
+        ReplaceOne({"timestamp": doc["timestamp"]}, doc, upsert=True)
+        for doc in docs
+    ]
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+    logger.info(
+        "Pushed %d rows to MongoDB collection %s.",
+        len(docs), MONGO_FEATURE_COLLECTION,
+    )
 
 
 # ---------------------------------------------------------------- Load
 def load_features() -> pd.DataFrame:
-    """
-    Load all engineered features from Hopsworks Feature Group or local Parquet.
-    Used by the training pipeline.
-    """
-    cfg = _cfg()["hopsworks"]
+    """Load all engineered features from MongoDB Atlas feature collection."""
+    collection = _feature_collection()
+    docs = list(collection.find({}))
+    if not docs:
+        return pd.DataFrame()
 
-    if _use_hopsworks():
-        try:
-            project = _hopsworks_login()
-            fs = project.get_feature_store()
-            try:
-                fv = fs.get_feature_view(
-                    name=cfg["feature_group_name"] + "_view", version=5
-                )
-                df = fv.training_data(description="daily training pull")[0]
-                logger.info("Loaded %d rows from Hopsworks Feature View.", len(df))
-                return df
-            except Exception:
-                fg = fs.get_feature_group(
-                    name=cfg["feature_group_name"], version=5
-                )
-                df = fg.read()
-                logger.info("Loaded %d rows from Hopsworks Feature Group.", len(df))
-                return df
-        except Exception as exc:
-            logger.warning("Hopsworks load failed (%s) — falling back to Parquet.", exc)
-
-    path = _parquet_path()
-    if not path.exists():
-        logger.info(
-            "Local parquet file not found. Automatically triggering historical backfill to regenerate features locally..."
-        )
-        try:
-            import subprocess
-            import sys
-
-            subprocess.run([sys.executable, "-m", "features.backfill_historical"], check=True)
-        except Exception as e:
-            raise FileNotFoundError(
-                f"No feature data found at {path} and automated backfill failed: {e}. "
-                "Run `python -m features.backfill_historical` first."
-            )
-    df = pd.read_parquet(path)
-    logger.info("Loaded %d rows from local Parquet store at %s.", len(df), path)
+    df = pd.DataFrame(docs)
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    logger.info(
+        "Loaded %d rows from MongoDB collection %s.",
+        len(df), MONGO_FEATURE_COLLECTION,
+    )
     return df
 
 
-# ---------------------------------------------------------------- Recent rows
 def load_recent_features(hours: int = 96) -> pd.DataFrame:
-    """Load the most recent `hours` rows — used by the inference API."""
+    """Load the most recent `hours` rows from MongoDB."""
     df = load_features()
+    if df.empty:
+        return df
     df = df.sort_values("timestamp").tail(hours).reset_index(drop=True)
     return df

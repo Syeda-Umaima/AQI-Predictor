@@ -15,18 +15,34 @@ Directive 4 compliance:
 """
 from __future__ import annotations
 
+import certifi
+import io
 import json
+import os
 from pathlib import Path
+import ssl
 
+import gridfs
+import joblib
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import yaml
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+from features.api_client import OpenMeteoClient
+from features.feature_engineering import build_feature_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
 CONFIG = yaml.safe_load((ROOT / "config" / "config.yaml").read_text(encoding="utf-8"))
+
+load_dotenv(dotenv_path=ROOT / ".env", override=False)
+MONGO_DB = "aqi_predictor"
+MONGO_FEATURE_COLLECTION = "features_v2"
+MONGO_METADATA_COLLECTION = "model_metadata"
 
 CITY = CONFIG["city"]["name"]
 HAZARD_THRESHOLD = CONFIG["dashboard"]["hazardous_aqi_threshold"]
@@ -100,30 +116,102 @@ st.sidebar.markdown(
 
 
 # ------------------------------------------------------------------ Helpers
+def _mongo_client() -> MongoClient:
+    uri = os.getenv("MONGO_URI", "").strip()
+    if not uri:
+        raise RuntimeError("MONGO_URI is required in .env for dashboard connectivity.")
+
+    ca = certifi.where()
+    client = MongoClient(
+        uri,
+        tls=True,
+        tlsCAFile=ca,
+        tlsInsecure=True,
+        serverSelectionTimeoutMS=10000,
+    )
+    client.admin.command("ping")
+    return client
+
+
+def _load_champion_from_gridfs() -> dict:
+    client = _mongo_client()
+    db = client[MONGO_DB]
+    metadata = db[MONGO_METADATA_COLLECTION].find_one(sort=[("timestamp", -1)])
+    if not metadata:
+        raise RuntimeError("No champion metadata found in MongoDB model_metadata collection.")
+
+    fs = gridfs.GridFS(db)
+    file_id = metadata.get("file_id")
+    if file_id is None:
+        raise RuntimeError("Champion metadata document is missing GridFS file_id.")
+
+    raw_model = fs.get(file_id).read()
+    artifact = joblib.load(io.BytesIO(raw_model))
+    return {
+        "champion": metadata["champion"],
+        "metrics": metadata["metrics"],
+        "feature_columns": metadata["feature_columns"],
+        "model": artifact["model"],
+        "scaler": artifact.get("scaler"),
+    }
+
+
+def _predict_rows(model, scaler, name: str, feature_columns: list[str], X: pd.DataFrame) -> pd.Series:
+    X = X.reindex(columns=feature_columns, fill_value=0.0)
+
+    if name == "lstm":
+        seq_len = model.input_shape[1]
+        X_s = scaler.transform(X)
+        X_seq = X_s.reshape(X_s.shape[0], 1, X_s.shape[1]).repeat(seq_len, axis=1)
+        return pd.Series(model.predict(X_seq, verbose=0).ravel())
+
+    if name == "ridge" and scaler is not None:
+        return pd.Series(model.predict(scaler.transform(X)))
+
+    return pd.Series(model.predict(X))
+
+
 def _load_forecast() -> dict:
-    try:
-        import requests as req
-        r = req.get("http://localhost:8000/forecast", timeout=5)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        ts = pd.date_range(pd.Timestamp.now("UTC"), periods=72, freq="h")
-        import numpy as np
-        base = 85 + 40 * np.sin(np.linspace(0, 3 * np.pi, 72))
-        return {
-            "champion": "demo",
-            "forecast": [
-                {"timestamp": str(t), "predicted_aqi": float(v)}
-                for t, v in zip(ts, base)
-            ],
-        }
+    champion = _load_champion_from_gridfs()
+    client = OpenMeteoClient()
+    raw = client.fetch_combined_forecast(forecast_days=4)
+    if raw.empty:
+        raise RuntimeError("Open-Meteo returned no forecast rows.")
+
+    feats = build_feature_frame(raw)
+    if feats.empty:
+        raise RuntimeError("Feature engineering produced no rows for forecast.")
+
+    X = feats.tail(72).copy()
+    preds = _predict_rows(
+        champion["model"],
+        champion["scaler"],
+        champion["champion"],
+        champion["feature_columns"],
+        X,
+    )
+    timestamps = feats["timestamp"].tail(72).astype(str).tolist()
+    return {
+        "champion": champion["champion"],
+        "champion_metrics": champion["metrics"],
+        "forecast": [
+            {"timestamp": t, "predicted_aqi": float(p)}
+            for t, p in zip(timestamps, preds)
+        ],
+    }
 
 
 def _load_leaderboard() -> dict | None:
-    lb = ARTIFACTS / "leaderboard.json"
-    if not lb.exists():
+    client = _mongo_client()
+    db = client[MONGO_DB]
+    metadata = db[MONGO_METADATA_COLLECTION].find_one(sort=[("timestamp", -1)])
+    if not metadata:
         return None
-    return json.loads(lb.read_text(encoding="utf-8"))
+    return {
+        "champion": metadata["champion"],
+        "metrics": metadata["metrics"],
+        "leaderboard": metadata["leaderboard"],
+    }
 
 
 def _load_feature_store() -> pd.DataFrame | None:
@@ -387,7 +475,7 @@ elif page == "Model Diagnostics & XAI":
 # ============================================================= PAGE 4
 else:
     st.title("📅 Historical Overview")
-    st.caption("Loaded directly from the Feature Store (Hopsworks cloud or local Parquet).")
+    st.caption("Loaded directly from the Feature Store (MongoDB Atlas).")
 
     df_fs = _load_feature_store()
     if df_fs is None or df_fs.empty:

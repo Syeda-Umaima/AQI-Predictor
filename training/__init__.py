@@ -1,1 +1,1 @@
-"""Training pipeline package for Pearls AQI Predictor."""
+"""Shared utility modules for the Pearls AQI Predictor project."""
