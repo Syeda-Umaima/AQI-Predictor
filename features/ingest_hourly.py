@@ -34,6 +34,12 @@ def run_hourly_ingest() -> pd.DataFrame:
             latest_ts.date(),
             today - timedelta(days=2),
         )
+
+        # If the latest data in the DB is from today or later, no need to fetch.
+        if window_start >= today:
+            logger.info("Data is already up to date (DB latest: %s >= Today: %s). Skipping ingestion.", window_start, today)
+            return pd.DataFrame()
+
         recent_aq = client.fetch_air_quality_archive(
             start_date=str(window_start),
             end_date=str(today),
