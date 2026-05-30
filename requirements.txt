@@ -1,4 +1,4 @@
-certifi==2024.9.2
+certifi
 lightgbm==4.0.0
 pymongo==4.7.0
 dnspython==2.5.0
