@@ -27,9 +27,15 @@ jobs:
           pip install -r requirements.txt
 
       - name: Train all models + select champion
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          PYTHONUTF8: 1
         run: python -m training.train
 
       - name: Generate SHAP + LIME explainability artefacts
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          PYTHONUTF8: 1
         run: python -m training.evaluate
 
       - name: Upload model artefacts
