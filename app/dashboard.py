@@ -176,6 +176,20 @@ def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.Dat
 st.set_page_config(page_title="AQI Predictor — Hyderabad", page_icon="🌫️", layout="wide")
 st.sidebar.markdown("### 🌫️ AQI Predictor")
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("**US AQI Scale Guide**")
+st.sidebar.markdown(
+    """
+    🟢 **0-50:** Good  
+    🟡 **51-100:** Moderate  
+    🟠 **101-150:** Unhealthy for Sensitive Groups  
+    🔴 **151-200:** Unhealthy  
+    🟣 **201-300:** Very Unhealthy  
+    🟤 **301+:** Hazardous  
+    """
+)
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio("Navigate", ["Real-Time Forecast", "EDA & Analysis", "Model Diagnostics & XAI", "Historical Overview"])
 
 # --- Main Logic ---
@@ -267,7 +281,7 @@ elif page == "Model Diagnostics & XAI":
         if not champ_meta:
             st.info("Model diagnostics are currently synchronizing from the cloud...")
         else:
-            st.subheader("Offline Leaderboard (Test Metrics)")
+            st.subheader("🏆 Model Performance Leaderboard (Test Metrics)")
             lb_df = pd.DataFrame(champ_meta["leaderboard"]).T.sort_values("rmse")
             st.dataframe(lb_df.style.format("{:.4f}"), use_container_width=True)
             
@@ -279,22 +293,24 @@ elif page == "Model Diagnostics & XAI":
             st.markdown("---")
             st.subheader("Global & Local Interpretation")
             
+            run_id = champ_meta.get("run_id", "Unknown Run")
+            
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**SHAP Global Importance**")
-                shap_file = db["fs.files"].find_one({"run_id": champ_meta["run_id"], "filename": "shap_summary.png"})
+                shap_file = db["fs.files"].find_one({"run_id": run_id, "filename": "shap_summary.png"})
                 if shap_file:
                     st.image(fs.get(shap_file["_id"]).read(), use_container_width=True)
                 else:
-                    st.info("SHAP plot not found for current run.")
+                    st.info("Visual explanation currently synchronizing.")
             
             with col2:
                 st.markdown("**LIME Local Explanation**")
-                lime_file = db["fs.files"].find_one({"run_id": champ_meta["run_id"], "filename": "lime_explanation.png"})
+                lime_file = db["fs.files"].find_one({"run_id": run_id, "filename": "lime_explanation.png"})
                 if lime_file:
                     st.image(fs.get(lime_file["_id"]).read(), use_container_width=True)
                 else:
-                    st.info("LIME plot not found for current run.")
+                    st.info("Visual explanation currently synchronizing.")
     except Exception as e:
         st.error(f"XAI Module Error: {e}")
 
