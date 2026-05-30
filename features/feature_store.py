@@ -106,3 +106,12 @@ def load_recent_features(hours: int = 96) -> pd.DataFrame:
         return df
     df = df.sort_values("timestamp").tail(hours).reset_index(drop=True)
     return df
+
+
+def get_latest_timestamp() -> pd.Timestamp | None:
+    """Return the latest timestamp stored in the MongoDB feature collection."""
+    collection = _feature_collection()
+    doc = collection.find_one(sort=[("timestamp", -1)])
+    if not doc or "timestamp" not in doc:
+        return None
+    return pd.to_datetime(doc["timestamp"], utc=True)

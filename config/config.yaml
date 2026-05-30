@@ -57,8 +57,8 @@ features:
     - temperature_2m
     - relative_humidity_2m
     - us_aqi
-  lag_hours: [1, 2, 3, 24, 48]
-  rolling_windows_hours: [3, 6, 12, 24]
+  lag_hours: [1, 2, 3, 6, 12, 24, 48, 72, 168]
+  rolling_windows_hours: [3, 6, 12, 24, 48, 72]
   rolling_stats: [mean, std, min, max]
   rolling_vars:
     - pm2_5

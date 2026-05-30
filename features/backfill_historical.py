@@ -117,4 +117,4 @@ if __name__ == "__main__":
     logger.info("Starting historical data backfill...")
     df = run_backfill()
     logger.info("Backfill process finished successfully.")
-    print(f"\n✅ Backfill complete: {len(df)} rows, {df.shape[1]} columns.")
+    print(f"\nBackfill complete: {len(df)} rows, {df.shape[1]} columns.")

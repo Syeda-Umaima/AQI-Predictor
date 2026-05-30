@@ -14,9 +14,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
-      FEATURE_STORE_MODE: "cloud"
+      MONGO_URI: ${{ secrets.MONGO_URI }}
 
     steps:
       - uses: actions/checkout@v4
@@ -32,16 +30,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run historical backfill (Open-Meteo → Feature Store)
-        env:
-          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-          HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
-          FEATURE_STORE_MODE: "cloud"
         run: python -m features.backfill_historical
-
-      - name: Upload local feature store snapshot (Parquet fallback)
-        if: env.HOPSWORKS_API_KEY == ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-feature-store
-          path: .local_fs/
-          retention-days: 30

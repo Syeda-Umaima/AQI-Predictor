@@ -52,10 +52,12 @@ def _load_champion() -> dict:
         from tensorflow.keras.models import load_model  # type: ignore
         _champion_cache["model"] = load_model(MODELS_DIR / "champion_lstm.keras")
         _champion_cache["scaler"] = joblib.load(MODELS_DIR / "champion_scaler.joblib")
+        _champion_cache["use_log_y"] = True
     else:
         artifact = joblib.load(MODELS_DIR / "champion.joblib")
         _champion_cache["model"] = artifact["model"]
         _champion_cache["scaler"] = artifact.get("scaler")
+        _champion_cache["use_log_y"] = artifact.get("use_log_y", False)
 
     _champion_cache["meta"] = meta
     _champion_cache["name"] = name
@@ -63,7 +65,7 @@ def _load_champion() -> dict:
     return _champion_cache
 
 
-def _predict_rows(model, scaler, name: str, meta: dict, X: pd.DataFrame) -> np.ndarray:
+def _predict_rows(model, scaler, name: str, meta: dict, X: pd.DataFrame, use_log_y: bool = False) -> np.ndarray:
     cols = meta["feature_columns"]
     available = [c for c in cols if c in X.columns]
     missing = [c for c in cols if c not in X.columns]
@@ -76,12 +78,17 @@ def _predict_rows(model, scaler, name: str, meta: dict, X: pd.DataFrame) -> np.n
         seq_len = model.input_shape[1]
         X_s = scaler.transform(X)
         X_seq = X_s.reshape(X_s.shape[0], 1, X_s.shape[1]).repeat(seq_len, axis=1)
-        return model.predict(X_seq, verbose=0).ravel()
+        preds_raw = model.predict(X_seq, verbose=0).ravel()
+    elif name == "ridge" and scaler is not None:
+        preds_raw = model.predict(scaler.transform(X))
+    else:
+        preds_raw = model.predict(X)
 
-    if name == "ridge" and scaler is not None:
-        return model.predict(scaler.transform(X))
-
-    return model.predict(X)
+    preds = np.asarray(preds_raw, dtype=float)
+    if use_log_y:
+        preds = np.expm1(preds)
+        
+    return np.maximum(preds, 0)
 
 
 # ---------------------------------------------------------------- Endpoints
@@ -107,25 +114,29 @@ def forecast() -> dict:
 
     try:
         client = OpenMeteoClient()
-        raw = client.fetch_combined_forecast(forecast_days=4)
+        raw = client.fetch_combined_forecast(forecast_days=6)
     except Exception as exc:
         logger.warning("Open-Meteo unavailable (%s) — using synthetic forecast.", exc)
-        raw = generate_synthetic_raw(days=4)
+        raw = generate_synthetic_raw(days=6)
 
     if raw.empty:
         raise HTTPException(500, "No forecast data available from Open-Meteo.")
 
-    feats = build_feature_frame(raw)
+    feats = build_feature_frame(raw, include_target=False)
     if feats.empty:
         raise HTTPException(500, "Feature engineering produced no rows for forecast.")
 
-    X = feats.tail(72)
+    X = feats.head(72)
+    if X.empty:
+        raise HTTPException(500, "Not enough forecast rows available for the 72-hour prediction window.")
+
     meta = champion["meta"]
     preds = _predict_rows(
         champion["model"], champion["scaler"],
-        champion["name"], meta, X.copy()
+        champion["name"], meta, X.copy(),
+        use_log_y=champion.get("use_log_y", False)
     )
-    timestamps = feats["timestamp"].tail(72).astype(str).tolist()
+    timestamps = X["timestamp"].astype(str).tolist()
 
     return {
         "champion": meta["champion"],
@@ -152,7 +163,8 @@ def predict(req: PredictRequest) -> dict:
     meta = champion["meta"]
     preds = _predict_rows(
         champion["model"], champion["scaler"],
-        champion["name"], meta, X
+        champion["name"], meta, X,
+        use_log_y=champion.get("use_log_y", False)
     )
     return {
         "predicted_aqi": float(preds[0]),

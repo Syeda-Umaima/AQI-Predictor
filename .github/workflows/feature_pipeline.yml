@@ -2,7 +2,7 @@ name: Feature Pipeline (hourly)
 
 on:
   schedule:
-    - cron: "0 * * * *"  # every hour, on the hour
+    - cron: "0 * * * *" # every hour, on the hour
   workflow_dispatch:
 
 jobs:
@@ -11,8 +11,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT }}
+      MONGO_URI: ${{ secrets.MONGO_URI }}
 
     steps:
       - uses: actions/checkout@v4
@@ -29,12 +28,3 @@ jobs:
 
       - name: Run hourly feature ingestion (Open-Meteo → Feature Store)
         run: python -m features.ingest_hourly
-
-      - name: Upload local feature store snapshot (Parquet fallback)
-        if: env.HOPSWORKS_API_KEY == ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-feature-store
-          path: .local_fs/
-          if-no-files-found: ignore
-          retention-days: 3
