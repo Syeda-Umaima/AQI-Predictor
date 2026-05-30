@@ -1,60 +1,25 @@
 """
-MongoDB Atlas Feature Store.
-
-Uses the MongoDB URI configured in .env to read and write feature data.
-This module replaces the old Hopsworks feature-store integration.
+MongoDB Atlas Feature Store with Production Resilience.
 """
 from __future__ import annotations
 
 import logging
-import os
-import ssl
 from pathlib import Path
 
-import certifi
 import pandas as pd
-from dotenv import load_dotenv
-from pymongo import MongoClient
 from pymongo.operations import ReplaceOne
+from features.mongo_utils import get_database, mongo_retry
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(dotenv_path=ROOT / ".env", override=False)
 
 MONGO_DB = "aqi_predictor"
 MONGO_FEATURE_COLLECTION = "features_v2"
 
-
-def _mongo_uri() -> str:
-    uri = os.getenv("MONGO_URI", "").strip()
-    if not uri:
-        raise EnvironmentError("MONGO_URI is required in .env for MongoDB access.")
-    return uri
-
-
-def _mongo_client() -> MongoClient:
-    uri = _mongo_uri()
-    ca = certifi.where()
-    client = MongoClient(
-        uri,
-        tls=True,
-        tlsCAFile=ca,
-        tlsInsecure=True,
-        serverSelectionTimeoutMS=10000,
-    )
-    client.admin.command("ping")
-    return client
-
-
-def _mongo_db():
-    return _mongo_client()[MONGO_DB]
-
-
 def _feature_collection():
-    return _mongo_db()[MONGO_FEATURE_COLLECTION]
+    return get_database(MONGO_DB)[MONGO_FEATURE_COLLECTION]
 
-
-# ---------------------------------------------------------------- Push
+@mongo_retry()
 def push_to_store(df: pd.DataFrame) -> None:
     """Insert engineered features into MongoDB Atlas feature store."""
     if df.empty:
@@ -78,8 +43,7 @@ def push_to_store(df: pd.DataFrame) -> None:
         len(docs), MONGO_FEATURE_COLLECTION,
     )
 
-
-# ---------------------------------------------------------------- Load
+@mongo_retry()
 def load_features() -> pd.DataFrame:
     """Load all engineered features from MongoDB Atlas feature collection."""
     collection = _feature_collection()
@@ -98,7 +62,6 @@ def load_features() -> pd.DataFrame:
     )
     return df
 
-
 def load_recent_features(hours: int = 96) -> pd.DataFrame:
     """Load the most recent `hours` rows from MongoDB."""
     df = load_features()
@@ -107,7 +70,7 @@ def load_recent_features(hours: int = 96) -> pd.DataFrame:
     df = df.sort_values("timestamp").tail(hours).reset_index(drop=True)
     return df
 
-
+@mongo_retry()
 def get_latest_timestamp() -> pd.Timestamp | None:
     """Return the latest timestamp stored in the MongoDB feature collection."""
     collection = _feature_collection()

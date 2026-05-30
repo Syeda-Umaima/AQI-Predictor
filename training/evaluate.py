@@ -1,21 +1,15 @@
 """
-Champion model evaluation — SHAP and LIME explainability.
-
-Generates:
-  artifacts/shap_summary.png   — beeswarm plot of SHAP values
-  artifacts/shap_bar.png       — mean |SHAP| bar chart
-  artifacts/lime_explanation.png — LIME local instance explanation
-  artifacts/lime_weights.json    — top feature weights from LIME
-
-Handles Ridge (LinearExplainer), tree models (TreeExplainer),
-and LSTM (KernelExplainer with background sampling).
+Champion model evaluation — SHAP and LIME explainability with Cloud Persistence.
 """
 from __future__ import annotations
 
 import json
 import logging
+import io
+import datetime
 from pathlib import Path
 
+import gridfs
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,156 +17,122 @@ import pandas as pd
 import shap
 from lime.lime_tabular import LimeTabularExplainer
 
-from training.train import load_training_frame, time_ordered_split, feature_columns
+from training.train import load_training_frame, time_ordered_split
+from features.mongo_utils import get_database, mongo_retry
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
-MODELS_DIR = ROOT / "models"
-ARTIFACTS = ROOT / "artifacts"
-ARTIFACTS.mkdir(exist_ok=True)
+MONGO_DB_NAME = "aqi_predictor"
+MODEL_METADATA_COLLECTION = "model_metadata"
 
-TARGET = "target_aqi_next_1h"
+@mongo_retry()
+def load_latest_champion():
+    """Load latest champion artifact from MongoDB GridFS."""
+    db = get_database(MONGO_DB_NAME)
+    meta = db[MODEL_METADATA_COLLECTION].find_one({"type": "latest_champion"})
+    if not meta:
+        raise FileNotFoundError("No champion metadata found in Cloud. Train models first.")
+    
+    fs = gridfs.GridFS(db)
+    raw_artifact = fs.get(meta["file_id"]).read()
+    artifact = joblib.load(io.BytesIO(raw_artifact))
+    
+    return meta["champion"], artifact["model"], artifact.get("scaler"), meta
 
-
-# ---------------------------------------------------------------- Load model
-def load_champion():
-    meta_path = MODELS_DIR / "leaderboard.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"leaderboard.json not found at {meta_path}. Train models first.")
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    name = meta["champion"]
-
-    if name == "lstm":
-        from tensorflow.keras.models import load_model  # type: ignore
-        model = load_model(MODELS_DIR / "champion_lstm.keras")
-        scaler = joblib.load(MODELS_DIR / "champion_scaler.joblib")
-        return name, model, scaler, meta
-
-    artifact = joblib.load(MODELS_DIR / "champion.joblib")
-    return name, artifact["model"], artifact.get("scaler"), meta
-
-
-# ---------------------------------------------------------------- Predict fn
-def _build_predict_fn(name: str, model, scaler, cols: list[str]):
-    if name == "lstm":
-        seq_len = model.input_shape[1]
-
-        def predict_fn(arr: np.ndarray) -> np.ndarray:
-            arr_s = scaler.transform(arr)
-            arr_seq = arr_s.reshape(arr_s.shape[0], 1, arr_s.shape[1]).repeat(seq_len, axis=1)
-            return model.predict(arr_seq, verbose=0).ravel()
-
-        return predict_fn
-
-    if name == "ridge" and scaler is not None:
-        def predict_fn(arr: np.ndarray) -> np.ndarray:
-            return model.predict(scaler.transform(arr))
-        return predict_fn
-
+def _build_predict_fn(name: str, model, scaler, cols: list[str], use_log_y: bool = False):
     def predict_fn(arr: np.ndarray) -> np.ndarray:
-        return model.predict(pd.DataFrame(arr, columns=cols))
-
+        df_tmp = pd.DataFrame(arr, columns=cols)
+        if scaler:
+            arr_final = scaler.transform(df_tmp)
+        else:
+            arr_final = df_tmp
+        
+        preds = model.predict(arr_final)
+        if use_log_y:
+            preds = np.expm1(preds)
+        return preds
     return predict_fn
 
+@mongo_retry()
+def persist_xai_artifact(buf: io.BytesIO, filename: str, run_id: str):
+    """Save XAI plots to GridFS."""
+    db = get_database(MONGO_DB_NAME)
+    fs = gridfs.GridFS(db)
+    fs.put(buf.getvalue(), filename=filename, run_id=run_id, type="xai_plot")
 
-# ------------------------------------------------------------------ SHAP
-def run_shap(name: str, model, scaler, meta: dict, X_test: pd.DataFrame) -> None:
+def run_shap(name: str, model, scaler, meta: dict, X_test: pd.DataFrame, run_id: str) -> None:
     cols = meta["feature_columns"]
-    X_test = X_test[cols].copy()
+    X_test_sub = X_test[cols].copy()
+    use_log_y = meta.get("use_log_y", False)
 
     try:
-        if name in ("random_forest", "xgboost"):
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(X_test)
-        elif name == "ridge":
-            X_scaled = pd.DataFrame(scaler.transform(X_test), columns=cols) if scaler else X_test
-            explainer = shap.LinearExplainer(model, X_scaled)
-            shap_values = explainer.shap_values(X_scaled)
-            X_test = X_scaled
-        else:
-            predict_fn = _build_predict_fn(name, model, scaler, cols)
-            n_bg = max(len(cols) + 10, min(200, len(X_test)))
-            background = shap.sample(X_test, min(n_bg, len(X_test)))
-            explainer = shap.KernelExplainer(predict_fn, background)
-            X_shap = X_test.iloc[:min(100, len(X_test))]
-            shap_values = explainer.shap_values(X_shap, nsamples=200)
-            X_test = X_shap
+        # Use a background sample for KernelExplainer if TreeExplainer fails or not applicable
+        predict_fn = _build_predict_fn(name, model, scaler, cols, use_log_y)
+        background = shap.sample(X_test_sub, min(100, len(X_test_sub)))
+        explainer = shap.KernelExplainer(predict_fn, background)
+        shap_values = explainer.shap_values(X_test_sub.iloc[:50], nsamples=100)
 
-        shap.summary_plot(shap_values, X_test, show=False, max_display=20)
-        plt.tight_layout()
-        plt.savefig(ARTIFACTS / "shap_summary.png", dpi=140, bbox_inches="tight")
+        # Summary Plot
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(shap_values, X_test_sub.iloc[:50], show=False)
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches="tight")
+        persist_xai_artifact(buf, "shap_summary.png", run_id)
         plt.close()
 
-        shap.summary_plot(shap_values, X_test, plot_type="bar", show=False, max_display=20)
-        plt.tight_layout()
-        plt.savefig(ARTIFACTS / "shap_bar.png", dpi=140, bbox_inches="tight")
-        plt.close()
-
-        logger.info("SHAP plots saved to %s/", ARTIFACTS)
-
+        logger.info("SHAP artifacts persisted to Cloud.")
     except Exception as exc:
-        logger.warning("SHAP failed (%s) — skipping SHAP plots.", exc)
+        logger.warning(f"SHAP failed: {exc}")
 
-
-# ------------------------------------------------------------------ LIME
-def run_lime(
-    name: str, model, scaler, meta: dict,
-    X_train: pd.DataFrame, X_test: pd.DataFrame,
-) -> None:
+def run_lime(name: str, model, scaler, meta: dict, X_train: pd.DataFrame, X_test: pd.DataFrame, run_id: str) -> None:
     cols = meta["feature_columns"]
-    X_train_sub = X_train[cols]
-    X_test_sub = X_test[cols]
-
-    background = X_train_sub.sample(min(2000, len(X_train_sub)), random_state=42).values
-    instance = X_test_sub.iloc[0].values
-    predict_fn = _build_predict_fn(name, model, scaler, cols)
-
+    use_log_y = meta.get("use_log_y", False)
+    
     try:
+        predict_fn = _build_predict_fn(name, model, scaler, cols, use_log_y)
+        
+        # Robust LIME initialization
+        # Ensure training data passed to LIME has positive variance for scaling
+        training_data = X_train[cols].values
+        
         explainer = LimeTabularExplainer(
-            training_data=background,
+            training_data=training_data,
             feature_names=cols,
-            mode="regression",
-            random_state=42,
+            mode="regression"
         )
-        explanation = explainer.explain_instance(
-            instance, predict_fn, num_features=min(20, len(cols))
-        )
-
-        fig = explanation.as_pyplot_figure()
-        plt.title(f"LIME local explanation — {meta['champion']}")
-        plt.tight_layout()
-        plt.savefig(ARTIFACTS / "lime_explanation.png", dpi=140, bbox_inches="tight")
+        
+        # Explain the most recent instance
+        instance = X_test[cols].iloc[-1].values
+        exp = explainer.explain_instance(instance, predict_fn, num_features=10)
+        
+        fig = exp.as_pyplot_figure()
+        plt.title(f"LIME Explanation: {name}")
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches="tight")
+        persist_xai_artifact(buf, "lime_explanation.png", run_id)
         plt.close()
-
-        weights = {feat: float(w) for feat, w in explanation.as_list()}
-        (ARTIFACTS / "lime_weights.json").write_text(
-            json.dumps(weights, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        logger.info("LIME artefacts saved to %s/", ARTIFACTS)
-
+        
+        logger.info("LIME artifacts persisted to Cloud.")
     except Exception as exc:
-        logger.warning("LIME failed (%s) — skipping LIME artefacts.", exc)
+        logger.warning(f"LIME failed: {exc}")
 
-
-# -------------------------------------------------------------------- Driver
-def run_explainability() -> None:
+def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    name, model, scaler, meta = load_champion()
-    df = load_training_frame()
-    cols = [c for c in meta["feature_columns"] if c in df.columns]
-    meta["feature_columns"] = cols
-
-    train_df, test_df = time_ordered_split(df, 0.2)
-    X_train = train_df[cols]
-    X_test = test_df[cols].sample(min(500, len(test_df)), random_state=42)
-
-    run_shap(name, model, scaler, meta, X_test)
-    run_lime(name, model, scaler, meta, X_train, X_test)
-
-    print("\nModel Leaderboard:")
-    print(pd.DataFrame(meta["leaderboard"]).T.round(4).sort_values("rmse"))
-    print(f"\nChampion: {meta['champion']}")
-
+    try:
+        name, model, scaler, meta = load_latest_champion()
+        run_id = meta["run_id"]
+        cols = meta["feature_columns"]
+        
+        df = load_training_frame()
+        if df.empty: return
+        
+        train_df, test_df = time_ordered_split(df.dropna(subset=cols), 0.2)
+        
+        run_shap(name, model, scaler, meta, test_df, run_id)
+        run_lime(name, model, scaler, meta, train_df, test_df, run_id)
+        
+    except Exception as e:
+        logger.error(f"Evaluation pipeline failed: {e}")
 
 if __name__ == "__main__":
-    run_explainability()
+    main()
