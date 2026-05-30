@@ -50,9 +50,9 @@ def get_mongo_client() -> MongoClient:
         uri,
         retryWrites=True,
         retryReads=True,
-        serverSelectionTimeoutMS=2000,  # 2 seconds
-        connectTimeoutMS=2000,          # 2 seconds
-        socketTimeoutMS=5000,           # 5 seconds
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=15000,
         tls=True,
         tlsCAFile=ca,
         tlsInsecure=True 
