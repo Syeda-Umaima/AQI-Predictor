@@ -150,6 +150,15 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     file_id = fs.put(buffer.getvalue(), filename=f"champion_{champ_name}.joblib", champion=champ_name, timestamp=meta["timestamp"])
     
     db[MODEL_METADATA_COLLECTION].insert_one({**meta, "file_id": file_id})
+
+    # Save leaderboard.json locally for evaluation/dashboard
+    # Ensure it uses UTC timestamp string for JSON serialization
+    local_meta = meta.copy()
+    local_meta["timestamp"] = local_meta["timestamp"].isoformat()
+    with open(MODELS_DIR / "leaderboard.json", "w", encoding="utf-8") as f:
+        json.dump(local_meta, f, indent=2, ensure_ascii=False)
+    
+    logger.info("Champion promoted: %s. Leaderboard saved to %s", champ_name, MODELS_DIR / "leaderboard.json")
     return champ_name
 
 def main():

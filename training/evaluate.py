@@ -31,14 +31,14 @@ MODELS_DIR = ROOT / "models"
 ARTIFACTS = ROOT / "artifacts"
 ARTIFACTS.mkdir(exist_ok=True)
 
-TARGET = "target_aqi_next_72h"
+TARGET = "target_aqi_next_1h"
 
 
 # ---------------------------------------------------------------- Load model
 def load_champion():
-    meta_path = ARTIFACTS / "leaderboard.json"
+    meta_path = MODELS_DIR / "leaderboard.json"
     if not meta_path.exists():
-        raise FileNotFoundError("leaderboard.json not found. Train models first.")
+        raise FileNotFoundError(f"leaderboard.json not found at {meta_path}. Train models first.")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     name = meta["champion"]
 
