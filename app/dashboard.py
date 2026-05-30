@@ -1,14 +1,15 @@
-import os
-import sys
-
-# Force Python to recognize the root project directory for Streamlit Cloud deployment
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from __future__ import annotations
 
 """
 Streamlit dashboard for the AQI Predictor.
 High-Performance Cloud Edition: Caching, Resilience, and Real-Time MLOps.
 """
-from __future__ import annotations
+
+import os
+import sys
+
+# Force Python to recognize the root project directory for Streamlit Cloud deployment
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import io
 from collections import deque
