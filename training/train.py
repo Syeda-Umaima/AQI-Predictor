@@ -153,12 +153,37 @@ def promote_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     return champ_name
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     df = load_training_frame()
-    if df.empty: return
+    if df.empty:
+        logger.error("Fetched 0 rows from feature store.")
+        return
     
+    logger.info("Fetched %d rows from feature store.", len(df))
+    
+    # 1. SMART COLUMN DROPPING: Remove columns with > 50% NaN values
+    nan_threshold = 0.5
+    high_nan_cols = [c for c in df.columns if df[c].isna().sum() / len(df) > nan_threshold]
+    if high_nan_cols:
+        logger.warning("Dropping columns with >50%% NaNs: %s", high_nan_cols)
+        df = df.drop(columns=high_nan_cols)
+    
+    logger.info("Rows remaining after dropping high-NaN columns: %d", len(df))
+    
+    # 2. Identify features and clean rows
     cols = feature_columns(df)
-    train_df, test_df = time_ordered_split(df.dropna(subset=[TARGET] + cols), 0.2)
+    df = df.dropna(subset=[TARGET] + cols).reset_index(drop=True)
+    
+    # 3. DATA VALIDATION GUARD: Ensure we have data for training
+    if df.shape[0] == 0:
+        raise ValueError(
+            "The training dataset is empty after data cleaning. "
+            "Please ensure historical data has been backfilled into the collection."
+        )
+    
+    logger.info("Final rows for training: %d", len(df))
+    
+    train_df, test_df = time_ordered_split(df, 0.2)
     X_train, y_train = train_df[cols], train_df[TARGET]
     X_test, y_test = test_df[cols], test_df[TARGET]
     
