@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-"""
-Streamlit dashboard for the AQI Predictor.
-High-Performance Cloud Edition: Caching, Resilience, and Real-Time MLOps.
-"""
-
+# Streamlit dashboard for the AQI Predictor.
+# High-Performance Cloud Edition: Caching, Resilience, and Real-Time MLOps.
+#
 import os
 import sys
 
@@ -30,6 +28,9 @@ from dotenv import load_dotenv
 from features.api_client import OpenMeteoClient
 from features.feature_engineering import build_feature_frame
 from features.mongo_utils import get_database, mongo_retry
+
+# --- Page Config (MUST be the first Streamlit command) ---
+st.set_page_config(page_title="AQI Predictor — Hyderabad", page_icon="🌫️", layout="wide")
 
 # --- Config & Initialization ---
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,9 +202,6 @@ def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.Dat
         forecast.append({"timestamp": timestamps[index].isoformat(), "predicted_aqi": pred})
         state.append(pred)
     return forecast
-
-# --- UI Setup ---
-st.set_page_config(page_title="AQI Predictor — Hyderabad", page_icon="🌫️", layout="wide")
 
 # --- Sidebar ---
 st.sidebar.markdown("### 🌫️ AQI Predictor")
