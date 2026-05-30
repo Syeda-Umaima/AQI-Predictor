@@ -2,56 +2,84 @@
 
 Professional end-to-end machine learning pipeline for real-time Air Quality Index (AQI) forecasting. This system provides a 72-hour recursive forecast for Hyderabad, Pakistan, utilizing a fully cloud-native, production-ready stack.
 
-## 🚀 Key Production Features
+## 🚀 Project Overview
 
-### 1. Cloud-Native Persistence (MongoDB Atlas)
+The **AQI Predictor** is an enterprise-grade MLOps project that automates the entire lifecycle of a machine learning model—from data ingestion and feature engineering to model training, evaluation, and live deployment. The system is designed to be resilient, scalable, and highly transparent through Explainable AI (XAI).
 
-- **Feature Store**: All engineered features are stored and indexed in MongoDB Atlas, replacing local CSV/JSON files.
-- **Model Registry (GridFS)**: Trained models, scalers, and XAI artifacts (SHAP/LIME plots) are streamed directly to MongoDB GridFS. This ensures that GitHub Action runners can finish their tasks without losing artifacts, and the dashboard can pull the latest assets from anywhere.
-- **Metadata Management**: Model performance metrics and run IDs are stored in a dedicated metadata collection, enabling dynamic routing and historical tracking.
+### **Core Architecture**
 
-### 2. Production Resilience & MLOps
-
-- **Network Fault Tolerance**: Centralized MongoDB utility with custom retry decorators and standardized production parameters (connection pooling, timeouts, TLS).
-- **Dynamic Model Routing**: The dashboard performs real-time validation against the latest live data point, automatically routing users to the specific model (XGBoost, LightGBM, etc.) currently exhibiting the lowest absolute error.
-- **Robust XAI Pipeline**: Evaluation scripts are hardened against data variance issues (e.g., LIME scale parameter errors) and ensure that SHAP/LIME artifacts are always generated and synced to the cloud.
-
-### 3. High-Performance Dashboard (Streamlit)
-
-- **Advanced Caching**: Utilizes `st.cache_resource` and `st.cache_data` with TTL parameters to minimize database latency and prevent infinite loading.
-- **Polished Fallback States**: Implements graceful UI degradation—if cloud assets are still synchronizing, the user is presented with helpful status messages instead of empty screens or raw errors.
+- **Automated Ingestion**: GitHub Actions trigger hourly pipelines to fetch meteorological and pollutant data from the **Open-Meteo API**.
+- **Feature Store**: All engineered features (lags, rolling windows, atmospheric interactions) are persisted in **MongoDB Atlas**.
+- **Recursive Forecasting**: A 1-hour ahead predictive model is used recursively to generate a robust 72-hour forecast, dynamically handling atmospheric drift.
+- **Dynamic Routing**: The production dashboard evaluates all registered models (XGBoost, LightGBM, Random Forest, etc.) against the latest live data point and automatically routes traffic to the specific model with the lowest real-time error.
+- **Cloud Model Registry**: Trained model binaries and XAI artifacts (SHAP/LIME) are stored in **MongoDB GridFS** for instant global availability.
 
 ## 🛠️ Tech Stack
 
-- **Data Source**: [Open-Meteo API](https://open-meteo.com/)
-- **Database**: MongoDB Atlas (Feature Store & Model Registry)
-- **Machine Learning**: Scikit-learn, XGBoost, LightGBM
-- **Explainability**: SHAP, LIME
-- **Frontend**: Streamlit
-- **CI/CD**: GitHub Actions
+- **Frontend**: [Streamlit](https://streamlit.io/) (Optimized with advanced caching and responsive UI)
+- **Database**: [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (Feature Store & Model Registry)
+- **ML Frameworks**: Scikit-learn, XGBoost, LightGBM
+- **XAI**: SHAP, LIME (Global and local interpretability)
+- **Orchestration**: GitHub Actions (CI/CD)
+- **Data Source**: Open-Meteo Satellite & Ground Station API
 
-## 📖 Deployment & Workflow
+## 📖 Local Setup & Development
 
-### 1. Local Setup
+### 1. Prerequisites
 
-```powershell
-# Install dependencies
+- Python 3.11+
+- A MongoDB Atlas Cluster (Free Tier is sufficient)
+
+### 2. Installation
+
+```bash
+# Clone the repository
+git clone <your-repo-url>
+cd aqi-predictor
+
+# Create and activate virtual environment
+python -m venv .venv
+# Windows:
+.\.venv\Scripts\Activate.ps1
+# Mac/Linux:
+source .venv/bin/activate
+
+# Install requirements
 pip install -r requirements.txt
-
-# Configure environment
-# Add MONGO_URI to your .env file
 ```
 
-### 2. Execution Flow
+### 3. Environment Configuration
 
-1. **Feature Engineering**: `python -m features.backfill_historical` (Seeds the Cloud Feature Store).
-2. **Model Training**: `python -m training.train` (Fits models and pushes Champion to GridFS).
-3. **Model Evaluation**: `python -m training.evaluate` (Generates XAI artifacts and pushes to GridFS).
-4. **Dashboard**: `streamlit run app/dashboard.py` (Connects to Cloud for live forecasting).
+Create a `.env` file in the root directory and add your MongoDB connection string:
 
-### 3. GitHub Actions
+```env
+MONGO_URI=mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?retryWrites=true&w=majority
+```
 
-The repository is pre-configured with two primary workflows:
+### 4. Running the Pipelines
 
-- **Hourly Feature Pipeline**: Automatically fetches latest weather/pollutant data and updates the Cloud Feature Store.
-- **Daily Training Pipeline**: Retrains all models, performs champion promotion, and refreshes XAI diagnostics in the Cloud Model Registry.
+```bash
+# Seed the Feature Store with historical data
+python -m features.backfill_historical
+
+# Train models and push champion to Cloud
+python -m training.train
+
+# Generate XAI diagnostics
+python -m training.evaluate
+
+# Launch the Dashboard
+streamlit run app/dashboard.py
+```
+
+## 🌐 Deployment
+
+This project is configured for continuous deployment to **Hugging Face Spaces**.
+
+- GitHub Actions automatically update the Cloud Feature Store every hour.
+- The dashboard pulls the latest "Champion" model and XAI plots directly from MongoDB GridFS.
+- **Zero-Downtime Retraining**: When the daily training pipeline promotes a new champion, the dashboard reflects the update instantly without a restart.
+
+---
+
+_Note: Predictions are based on regional satellite data and may differ from hyper-local ground sensors._

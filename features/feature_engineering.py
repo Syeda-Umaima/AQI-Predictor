@@ -39,26 +39,30 @@ def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     lags = cfg["features"]["lag_hours"]
 
     df = df.sort_values("timestamp").reset_index(drop=True)
+    new_cols = {}
     for lag in lags:
         for var in lag_vars:
-            df[f"{var}_lag_{lag}h"] = df[var].shift(lag)
-    return df
+            new_cols[f"{var}_lag_{lag}h"] = df[var].shift(lag)
+    
+    return pd.concat([df, pd.DataFrame(new_cols)], axis=1)
 
 def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Rolling aggregations over past windows."""
+    """Rolling aggregations over past windows with optimized concatenation."""
     cfg = _cfg()
     roll_vars = [v for v in cfg["features"]["rolling_vars"] if v in df.columns]
     windows = cfg["features"]["rolling_windows_hours"]
 
     df = df.sort_values("timestamp").reset_index(drop=True)
+    new_cols = {}
     for window in windows:
         for var in roll_vars:
             base = df[var].shift(1).rolling(window, min_periods=1)
-            df[f"{var}_roll_mean_{window}h"] = base.mean()
-            df[f"{var}_roll_std_{window}h"] = base.std().fillna(0)
-            df[f"{var}_roll_min_{window}h"] = base.min()
-            df[f"{var}_roll_max_{window}h"] = base.max()
-    return df
+            new_cols[f"{var}_roll_mean_{window}h"] = base.mean()
+            new_cols[f"{var}_roll_std_{window}h"] = base.std().fillna(0)
+            new_cols[f"{var}_roll_min_{window}h"] = base.min()
+            new_cols[f"{var}_roll_max_{window}h"] = base.max()
+    
+    return pd.concat([df, pd.DataFrame(new_cols)], axis=1)
 
 def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     """Atmospheric interaction signals."""
@@ -77,48 +81,56 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     dust = _safe_col("dust")
     aqi = _safe_col("us_aqi")
 
-    df["feat_temp_x_humidity"] = temp * hum
-    df["feat_temp_humidity_index"] = (temp * hum / 100.0).fillna(0)
-    df["feat_temp_humidity_ratio"] = (temp / hum.replace(0, np.nan)).fillna(0)
-    df["feat_wind_x_pressure"] = wind * pres
-    df["feat_wind_humidity_interaction"] = wind * hum
-    df["feat_wind_div_pressure"] = (wind / pres.replace(0, np.nan)).fillna(0)
-    df["feat_pm25_x_no2"] = pm25 * no2
-    df["feat_pm25_x_pm10"] = pm25 * pm10
-    df["feat_pm25_x_humidity"] = pm25 * hum
-    df["feat_pm10_div_pm25"] = (pm10 / pm25.replace(0, np.nan)).fillna(1)
-    df["feat_dust_x_wind"] = dust * wind
-    df["feat_aqi_x_temp"] = aqi * temp
-    df["feat_aqi_div_wind"] = (aqi / wind.replace(0, np.nan)).fillna(aqi)
-    df["feat_pm25_div_wind"] = (pm25 / wind.replace(0, np.nan)).fillna(pm25)
-    df["feat_apparent_vs_actual"] = (_safe_col("apparent_temperature") - temp)
-    df["feat_cloud_x_precip"] = (_safe_col("cloud_cover") * _safe_col("precipitation"))
-    df["feat_temp_gradient"] = temp.diff().fillna(0)
-    df["feat_pressure_gradient"] = pres.diff().fillna(0)
-    return df
+    new_feats = {}
+    new_feats["feat_temp_x_humidity"] = temp * hum
+    new_feats["feat_temp_humidity_index"] = (temp * hum / 100.0).fillna(0)
+    new_feats["feat_temp_humidity_ratio"] = (temp / hum.replace(0, np.nan)).fillna(0)
+    new_feats["feat_wind_x_pressure"] = wind * pres
+    new_feats["feat_wind_humidity_interaction"] = wind * hum
+    new_feats["feat_wind_div_pressure"] = (wind / pres.replace(0, np.nan)).fillna(0)
+    new_feats["feat_pm25_x_no2"] = pm25 * no2
+    new_feats["feat_pm25_x_pm10"] = pm25 * pm10
+    new_feats["feat_pm25_x_humidity"] = pm25 * hum
+    new_feats["feat_pm10_div_pm25"] = (pm10 / pm25.replace(0, np.nan)).fillna(1)
+    new_feats["feat_dust_x_wind"] = dust * wind
+    new_feats["feat_aqi_x_temp"] = aqi * temp
+    new_feats["feat_aqi_div_wind"] = (aqi / wind.replace(0, np.nan)).fillna(aqi)
+    new_feats["feat_pm25_div_wind"] = (pm25 / wind.replace(0, np.nan)).fillna(pm25)
+    new_feats["feat_apparent_vs_actual"] = (_safe_col("apparent_temperature") - temp)
+    new_feats["feat_cloud_x_precip"] = (_safe_col("cloud_cover") * _safe_col("precipitation"))
+    new_feats["feat_temp_gradient"] = temp.diff().fillna(0)
+    new_feats["feat_pressure_gradient"] = pres.diff().fillna(0)
+    
+    return pd.concat([df, pd.DataFrame(new_feats)], axis=1)
 
 def add_forecast_features(df: pd.DataFrame) -> pd.DataFrame:
     """Weather lookahead features."""
     df = df.copy()
     df = df.sort_values("timestamp").reset_index(drop=True)
-    df["temperature_target_hour"] = df["temperature_2m"].shift(-1)
-    df["relative_humidity_target_hour"] = df["relative_humidity_2m"].shift(-1)
-    df["wind_speed_target_hour"] = df["wind_speed_10m"].shift(-1)
-    df["precipitation_target_hour"] = df["precipitation"].shift(-1)
+    new_cols = {}
+    new_cols["temperature_target_hour"] = df["temperature_2m"].shift(-1)
+    new_cols["relative_humidity_target_hour"] = df["relative_humidity_2m"].shift(-1)
+    new_cols["wind_speed_target_hour"] = df["wind_speed_10m"].shift(-1)
+    new_cols["precipitation_target_hour"] = df["precipitation"].shift(-1)
     if "cloud_cover" in df.columns:
-        df["cloud_cover_target_hour"] = df["cloud_cover"].shift(-1)
-    return df
+        new_cols["cloud_cover_target_hour"] = df["cloud_cover"].shift(-1)
+    
+    return pd.concat([df, pd.DataFrame(new_cols)], axis=1)
 
 def add_aqi_change_rate(df: pd.DataFrame) -> pd.DataFrame:
     """AQI change rate features."""
     df = df.copy()
     df = df.sort_values("timestamp").reset_index(drop=True)
     if "us_aqi" not in df.columns: return df
+    
+    new_cols = {}
     for h in (3, 6, 12, 24):
-        df[f"aqi_change_{h}h"] = df["us_aqi"].shift(1) - df["us_aqi"].shift(h + 1)
-    change_cols = [c for c in df.columns if c.startswith("aqi_change_")]
-    df[change_cols] = df[change_cols].fillna(0)
-    return df
+        new_cols[f"aqi_change_{h}h"] = df["us_aqi"].shift(1) - df["us_aqi"].shift(h + 1)
+    
+    res = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
+    change_cols = [c for c in res.columns if c.startswith("aqi_change_")]
+    res[change_cols] = res[change_cols].fillna(0)
+    return res
 
 def add_target(df: pd.DataFrame) -> pd.DataFrame:
     """Supervised target: us_aqi at T+1."""

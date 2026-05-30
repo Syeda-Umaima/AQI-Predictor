@@ -44,12 +44,12 @@ def get_mongo_client() -> MongoClient:
         uri,
         retryWrites=True,
         retryReads=True,
-        serverSelectionTimeoutMS=15000,
-        connectTimeoutMS=30000,
-        socketTimeoutMS=45000,
+        serverSelectionTimeoutMS=3000,
+        connectTimeoutMS=3000,
+        socketTimeoutMS=5000,
         tls=True,
         tlsCAFile=ca,
-        tlsInsecure=True # Handling potential CA issues in restricted environments
+        tlsInsecure=True 
     )
     return client
 
