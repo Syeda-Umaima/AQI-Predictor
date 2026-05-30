@@ -1,6 +1,6 @@
 """
 Streamlit dashboard for the AQI Predictor.
-Optimized for Cloud Deployment with Caching, Resilience, and a Comprehensive UI.
+High-Performance Cloud Edition: Caching, Resilience, and Real-Time MLOps.
 """
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ from features.api_client import OpenMeteoClient
 from features.feature_engineering import build_feature_frame
 from features.mongo_utils import get_database, mongo_retry
 
+# --- Config & Initialization ---
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config" / "config.yaml").read_text(encoding="utf-8"))
-
 load_dotenv(dotenv_path=ROOT / ".env", override=False)
+
 MONGO_DB_NAME = "aqi_predictor"
 MODEL_METADATA_COLLECTION = "model_metadata"
-
 CITY = CONFIG["city"]["name"]
 HAZARD_THRESHOLD = CONFIG["dashboard"]["hazardous_aqi_threshold"]
 
@@ -49,65 +49,71 @@ def _aqi_label_color(aqi: float) -> tuple[str, str]:
             return label, color
     return "Hazardous", "#7f1d1d"
 
-@st.cache_resource(ttl=600)
-def _load_all_models_cached():
-    """Load all distinct models from Cloud GridFS."""
+# --- Cached Cloud Data Access ---
+
+@st.cache_resource(ttl=900)
+def _load_cloud_registry():
+    """Load all distinct models and the latest champion metadata from Cloud."""
     try:
         db = get_database(MONGO_DB_NAME)
-        fs = gridfs.GridFS(db)
-        
+        # Fetch latest champion metadata
+        latest_meta = db[MODEL_METADATA_COLLECTION].find_one({"type": "latest_champion"})
+        # Fetch all distinct historical models for dynamic routing
         distinct_models = db[MODEL_METADATA_COLLECTION].distinct("champion")
+        
         models_dict = {}
+        fs = gridfs.GridFS(db)
         
         for name in distinct_models:
-            meta = db[MODEL_METADATA_COLLECTION].find_one({"champion": name, "type": "history"}, sort=[("timestamp", -1)])
-            if meta and "file_id" in meta:
-                raw = fs.get(meta["file_id"]).read()
-                artifact = joblib.load(io.BytesIO(raw))
-                models_dict[name] = {
-                    "model": artifact["model"],
-                    "scaler": artifact.get("scaler"),
-                    "use_log_y": artifact.get("use_log_y", False),
-                    "feature_columns": meta["feature_columns"]
-                }
-        return models_dict
+            m_meta = db[MODEL_METADATA_COLLECTION].find_one(
+                {"champion": name, "type": "history"}, 
+                sort=[("timestamp", -1)]
+            )
+            if m_meta and "file_id" in m_meta:
+                try:
+                    raw = fs.get(m_meta["file_id"]).read()
+                    artifact = joblib.load(io.BytesIO(raw))
+                    models_dict[name] = {
+                        "model": artifact["model"],
+                        "scaler": artifact.get("scaler"),
+                        "use_log_y": artifact.get("use_log_y", False),
+                        "feature_columns": m_meta["feature_columns"],
+                        "metrics": m_meta.get("metrics", {})
+                    }
+                except Exception:
+                    continue
+        
+        return {"latest_meta": latest_meta, "models_dict": models_dict}
     except Exception as e:
-        st.error(f"Cloud Connection Failed: {e}")
-        return {}
+        st.error(f"Cloud Registry Error: {e}")
+        return {"latest_meta": None, "models_dict": {}}
 
-@st.cache_resource(ttl=600)
-def _load_champion_cached():
-    """Load latest champion from Cloud."""
-    try:
-        db = get_database(MONGO_DB_NAME)
-        meta = db[MODEL_METADATA_COLLECTION].find_one({"type": "latest_champion"})
-        if not meta:
-            return None
-
-        fs = gridfs.GridFS(db)
-        raw_model = fs.get(meta["file_id"]).read()
-        artifact = joblib.load(io.BytesIO(raw_model))
-        return {
-            "champion": meta["champion"],
-            "metrics": meta["metrics"],
-            "feature_columns": meta["feature_columns"],
-            "model": artifact["model"],
-            "scaler": artifact.get("scaler"),
-            "use_log_y": artifact.get("use_log_y", False),
-            "leaderboard": meta.get("leaderboard", {})
-        }
-    except Exception as e:
-        st.error(f"Cloud Connection Failed: {e}")
-        return None
-
-@st.cache_data(ttl=600)
-def _load_features_cached():
+@st.cache_data(ttl=900)
+def _load_feature_store_cached():
+    """Load historical features with fail-fast logic."""
     try:
         from features.feature_store import load_features
         return load_features()
     except Exception as e:
-        st.error(f"Cloud Data Store Offline: {e}")
+        st.error(f"Feature Store Offline: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=900)
+def _fetch_xai_image(run_id: str, filename: str):
+    """Securely fetch XAI plots from GridFS with verification."""
+    if not run_id or run_id == "Unknown Run":
+        return None
+    try:
+        db = get_database(MONGO_DB_NAME)
+        fs = gridfs.GridFS(db)
+        file_doc = db["fs.files"].find_one({"run_id": run_id, "filename": filename})
+        if file_doc:
+            return fs.get(file_doc["_id"]).read()
+    except Exception:
+        pass
+    return None
+
+# --- Prediction & Logic ---
 
 def _predict_rows(model, scaler, name: str, feature_columns: list[str], X: pd.DataFrame, use_log_y: bool = False) -> pd.Series:
     X = X.reindex(columns=feature_columns, fill_value=0.0)
@@ -121,20 +127,34 @@ def _predict_rows(model, scaler, name: str, feature_columns: list[str], X: pd.Da
         preds = np.expm1(preds)
     return pd.Series(np.maximum(preds, 0))
 
-def _get_live_accuracy_leaderboard(models: dict[str, dict], latest_data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    if not models or latest_data.empty or len(latest_data) < 2:
-        return pd.DataFrame(), next(iter(models.keys())) if models else "N/A"
+def _calculate_live_metrics(models: dict[str, dict], history: pd.DataFrame):
+    """Calculate realistic drift/accuracy using last 24h data."""
+    if not models or history.empty or len(history) < 25:
+        return pd.DataFrame(), "N/A"
     
-    actual = latest_data["us_aqi"].iloc[-1]
-    features_t_minus_1 = latest_data.iloc[[-2]]
-    
+    # Last 24 hours of actual data
+    recent = history.sort_values("timestamp").tail(25).reset_index(drop=True)
     results = []
-    for name, m_info in models.items():
-        pred = _predict_rows(m_info["model"], m_info["scaler"], name, m_info["feature_columns"], features_t_minus_1, m_info["use_log_y"]).iloc[0]
-        results.append({"Model": name, "Live Error": abs(actual - pred), "Live Prediction": pred})
     
-    df_acc = pd.DataFrame(results).sort_values("Live Error")
-    return df_acc, df_acc["Model"].iloc[0]
+    for name, m_info in models.items():
+        # Predict on T-1 to compare with T
+        try:
+            X_batch = recent.iloc[:-1] # Features
+            y_actual = recent["us_aqi"].iloc[1:].values # Actual targets
+            
+            y_pred = _predict_rows(
+                m_info["model"], m_info["scaler"], name, 
+                m_info["feature_columns"], X_batch, m_info["use_log_y"]
+            ).values
+            
+            mae = np.mean(np.abs(y_actual - y_pred))
+            results.append({"Model": name, "Live MAE": mae, "Baseline Test MAE": m_info["metrics"].get("mae", 0)})
+        except Exception:
+            continue
+            
+    df_acc = pd.DataFrame(results).sort_values("Live MAE")
+    best_model = df_acc["Model"].iloc[0] if not df_acc.empty else "N/A"
+    return df_acc, best_model
 
 def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.DataFrame) -> list[dict]:
     raw = raw.copy()
@@ -167,22 +187,26 @@ def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.Dat
             row[f"us_aqi_lag_{lag}h"] = state[-lag]
 
         X_row = pd.DataFrame([row])
-        pred = _predict_rows(champion["model"], champion["scaler"], champion["champion"], champion["feature_columns"], X_row, champion.get("use_log_y", False)).iloc[0]
+        pred = _predict_rows(
+            champion["model"], champion["scaler"], champion["champion"], 
+            champion["feature_columns"], X_row, champion.get("use_log_y", False)
+        ).iloc[0]
         forecast.append({"timestamp": timestamps[index].isoformat(), "predicted_aqi": pred})
         state.append(pred)
     return forecast
 
 # --- UI Setup ---
 st.set_page_config(page_title="AQI Predictor — Hyderabad", page_icon="🌫️", layout="wide")
-st.sidebar.markdown("### 🌫️ AQI Predictor")
 
+# --- Sidebar ---
+st.sidebar.markdown("### 🌫️ AQI Predictor")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**US AQI Scale Guide**")
 st.sidebar.markdown(
     """
     🟢 **0-50:** Good  
     🟡 **51-100:** Moderate  
-    🟠 **101-150:** Unhealthy for Sensitive Groups  
+    🟠 **101-150:** Sensitive  
     🔴 **151-200:** Unhealthy  
     🟣 **201-300:** Very Unhealthy  
     🟤 **301+:** Hazardous  
@@ -192,137 +216,120 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio("Navigate", ["Real-Time Forecast", "EDA & Analysis", "Model Diagnostics & XAI", "Historical Overview"])
 
-# --- Main Logic ---
+# --- App Execution ---
+registry = _load_cloud_registry()
+models = registry["models_dict"]
+history = _load_feature_store_cached()
+
+if not models or history.empty:
+    st.error("Cloud System Synchronizing. Please ensure backfill and training pipelines have completed.")
+    st.stop()
+
+# Dynamic Routing & Metrics
+acc_df, best_model_name = _calculate_live_metrics(models, history)
+st.sidebar.subheader("🎯 Live Model Performance")
+if not acc_df.empty:
+    st.sidebar.table(acc_df.set_index("Model").style.format("{:.2f}"))
+st.sidebar.info(f"Dynamic Routing: Using **{best_model_name}**")
+
+# Champion model for forecast
+champion = models[best_model_name]
+champion["champion"] = best_model_name
+
 if page == "Real-Time Forecast":
     st.title("🌫️ Real-Time AQI Forecast")
     st.caption("Note: Predictions are based on regional satellite data (Open-Meteo) and may slightly differ from hyper-local ground sensors.")
     
-    try:
-        models = _load_all_models_cached()
-        history = _load_features_cached()
+    with st.spinner("Generating 72-hour recursive forecast..."):
+        client = OpenMeteoClient()
+        raw_forecast = client.fetch_combined_forecast(forecast_days=6)
+        forecast_data = _build_recursive_forecast(champion, raw_forecast, history)
         
-        if not models:
-            st.error("Cloud Registry Unavailable. Please ensure the training pipeline has been executed.")
-            st.stop()
-            
-        acc_df, best_model_name = _get_live_accuracy_leaderboard(models, history.tail(5))
-        
-        st.sidebar.subheader("🎯 Live Model Accuracy")
-        if not acc_df.empty:
-            st.sidebar.table(acc_df[["Model", "Live Error"]].set_index("Model").style.format("{:.2f}"))
-        st.sidebar.info(f"Dynamic Routing: Using **{best_model_name}**")
-        
-        champion = models[best_model_name]
-        champion["champion"] = best_model_name
-        
-        with st.spinner("Generating 72-hour recursive forecast..."):
-            client = OpenMeteoClient()
-            raw_forecast = client.fetch_combined_forecast(forecast_days=6)
-            forecast_data = _build_recursive_forecast(champion, raw_forecast, history)
-            
-        df = pd.DataFrame(forecast_data)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        
-        current_aqi = df["predicted_aqi"].iloc[0]
-        max_aqi = df["predicted_aqi"].max()
-        label, color = _aqi_label_color(current_aqi)
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Live Prediction", f"{current_aqi:.1f}", label)
-        c2.metric("72h Max Forecast", f"{max_aqi:.1f}")
-        c3.metric("72h Average", f"{df['predicted_aqi'].mean():.1f}")
-        c4.metric("Active Model", best_model_name.upper())
-        
-        if max_aqi >= HAZARD_THRESHOLD:
-            st.error(f"⚠️ **HAZARDOUS AQI ALERT** — Forecast peak of **{max_aqi:.0f}** exceeds threshold.", icon="🚨")
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["predicted_aqi"], mode="lines+markers", name="Forecast", line=dict(color="#3b82f6", width=2), fill="tozeroy"))
-        for lo, hi, band_label, band_color in US_AQI_BANDS:
-            fig.add_hrect(y0=lo, y1=min(hi, max_aqi + 20), fillcolor=band_color, opacity=0.05, annotation_text=band_label, annotation_position="right", line_width=0)
-        fig.update_layout(title=f"72-Hour AQI Forecast — {CITY}", xaxis_title="Time (Local)", yaxis_title="US AQI", template="plotly_white", height=500)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.subheader("Forecast Detail Table")
-        display_df = df.copy().rename(columns={"timestamp": "Time", "predicted_aqi": "AQI"})
-        display_df["Category"] = display_df["AQI"].apply(lambda v: _aqi_label_color(v)[0])
-        st.dataframe(display_df.set_index("Time"), use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"Critical System Error: {e}")
+    df = pd.DataFrame(forecast_data)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    
+    current_aqi = df["predicted_aqi"].iloc[0]
+    max_aqi = df["predicted_aqi"].max()
+    label, color = _aqi_label_color(current_aqi)
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Live Prediction", f"{current_aqi:.1f}", label)
+    c2.metric("72h Max Forecast", f"{max_aqi:.1f}")
+    c3.metric("72h Average", f"{df['predicted_aqi'].mean():.1f}")
+    c4.metric("Active Model", best_model_name.upper())
+    
+    if max_aqi >= HAZARD_THRESHOLD:
+        st.error(f"⚠️ **HAZARDOUS AQI ALERT** — Forecast peak of **{max_aqi:.0f}** exceeds threshold.", icon="🚨")
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["predicted_aqi"], mode="lines+markers", name="Forecast", line=dict(color="#3b82f6", width=2), fill="tozeroy"))
+    for lo, hi, band_label, band_color in US_AQI_BANDS:
+        fig.add_hrect(y0=lo, y1=min(hi, max_aqi + 20), fillcolor=band_color, opacity=0.05, annotation_text=band_label, annotation_position="right", line_width=0)
+    fig.update_layout(title=f"72-Hour AQI Forecast — {CITY}", xaxis_title="Time (Local)", yaxis_title="US AQI", template="plotly_white", height=500)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    st.subheader("Forecast Detail Table")
+    display_df = df.copy().rename(columns={"timestamp": "Time", "predicted_aqi": "AQI"})
+    display_df["Category"] = display_df["AQI"].apply(lambda v: _aqi_label_color(v)[0])
+    st.dataframe(display_df.set_index("Time"), use_container_width=True)
 
 elif page == "EDA & Analysis":
     st.title("📊 Exploratory Data Analysis")
-    df = _load_features_cached()
-    if df.empty:
-        st.info("Feature store is synchronizing from cloud...")
-    else:
-        st.subheader("Correlation Heatmap")
-        corr_cols = [c for c in ["us_aqi", "pm2_5", "pm10", "temperature_2m", "relative_humidity_2m", "wind_speed_10m"] if c in df.columns]
-        fig_corr = px.imshow(df[corr_cols].corr(), text_auto=".2f", color_continuous_scale='RdBu_r')
-        st.plotly_chart(fig_corr, use_container_width=True)
+    st.subheader("Correlation Heatmap")
+    corr_cols = [c for c in ["us_aqi", "pm2_5", "pm10", "temperature_2m", "relative_humidity_2m", "wind_speed_10m"] if c in history.columns]
+    fig_corr = px.imshow(history[corr_cols].corr(), text_auto=".2f", color_continuous_scale='RdBu_r')
+    st.plotly_chart(fig_corr, use_container_width=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Diurnal AQI Cycle")
-            df["hour"] = df["timestamp"].dt.hour
-            fig_hour = px.box(df, x="hour", y="us_aqi", title="AQI by Hour of Day")
-            st.plotly_chart(fig_hour, use_container_width=True)
-        with col2:
-            st.subheader("Seasonal Trends")
-            df["month"] = df["timestamp"].dt.month
-            fig_month = px.box(df, x="month", y="us_aqi", title="AQI by Month")
-            st.plotly_chart(fig_month, use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Diurnal AQI Cycle")
+        history["hour"] = history["timestamp"].dt.hour
+        fig_hour = px.box(history, x="hour", y="us_aqi", title="AQI by Hour of Day")
+        st.plotly_chart(fig_hour, use_container_width=True)
+    with col2:
+        st.subheader("Seasonal Trends")
+        history["month"] = history["timestamp"].dt.month
+        fig_month = px.box(history, x="month", y="us_aqi", title="AQI by Month")
+        st.plotly_chart(fig_month, use_container_width=True)
 
 elif page == "Model Diagnostics & XAI":
     st.title("🧪 Model Diagnostics & Explainability")
-    try:
-        champ_meta = _load_champion_cached()
-        if not champ_meta:
-            st.info("Model diagnostics are currently synchronizing from the cloud...")
-        else:
-            st.subheader("🏆 Model Performance Leaderboard (Test Metrics)")
-            lb_df = pd.DataFrame(champ_meta["leaderboard"]).T.sort_values("rmse")
-            st.dataframe(lb_df.style.format("{:.4f}"), use_container_width=True)
-            
-            st.success(f"🏆 **Champion Model:** {champ_meta['champion'].upper()}")
-            
-            db = get_database(MONGO_DB_NAME)
-            fs = gridfs.GridFS(db)
-            
-            st.markdown("---")
-            st.subheader("Global & Local Interpretation")
-            
-            run_id = champ_meta.get("run_id", "Unknown Run")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**SHAP Global Importance**")
-                shap_file = db["fs.files"].find_one({"run_id": run_id, "filename": "shap_summary.png"})
-                if shap_file:
-                    st.image(fs.get(shap_file["_id"]).read(), use_container_width=True)
-                else:
-                    st.info("Visual explanation currently synchronizing.")
-            
-            with col2:
-                st.markdown("**LIME Local Explanation**")
-                lime_file = db["fs.files"].find_one({"run_id": run_id, "filename": "lime_explanation.png"})
-                if lime_file:
-                    st.image(fs.get(lime_file["_id"]).read(), use_container_width=True)
-                else:
-                    st.info("Visual explanation currently synchronizing.")
-    except Exception as e:
-        st.error(f"XAI Module Error: {e}")
+    latest_meta = registry["latest_meta"]
+    if not latest_meta:
+        st.info("Visual explanation currently synchronizing.")
+    else:
+        st.subheader("🏆 Model Performance Leaderboard (Test Metrics)")
+        lb_df = pd.DataFrame(latest_meta["leaderboard"]).T.sort_values("rmse")
+        st.dataframe(lb_df.style.format("{:.4f}"), use_container_width=True)
+        
+        st.success(f"🏆 **Champion Model:** {latest_meta['champion'].upper()}")
+        
+        st.markdown("---")
+        st.subheader("Global & Local Interpretation")
+        run_id = latest_meta.get("run_id", "Unknown Run")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**SHAP Global Importance**")
+            shap_bytes = _fetch_xai_image(run_id, "shap_summary.png")
+            if shap_bytes:
+                st.image(shap_bytes, use_container_width=True)
+            else:
+                st.info("SHAP plot not found for this training run. They will generate on the next training cycle.")
+        
+        with col2:
+            st.markdown("**LIME Local Explanation**")
+            lime_bytes = _fetch_xai_image(run_id, "lime_explanation.png")
+            if lime_bytes:
+                st.image(lime_bytes, use_container_width=True)
+            else:
+                st.info("LIME plot not found for this training run. They will generate on the next training cycle.")
 
 else:
     st.title("📅 Historical Overview")
-    df = _load_features_cached()
-    if not df.empty:
-        st.subheader("Historical US AQI Trend")
-        fig_hist = px.line(df, x="timestamp", y="us_aqi", title="Feature Store Timeseries")
-        st.plotly_chart(fig_hist, use_container_width=True)
-        
-        st.subheader("Raw Feature Data (Latest 100 Rows)")
-        st.dataframe(df.sort_values("timestamp", ascending=False).head(100), use_container_width=True)
-    else:
-        st.info("No historical data available in the cloud.")
+    st.subheader("Historical US AQI Trend")
+    fig_hist = px.line(history, x="timestamp", y="us_aqi", title="Feature Store Timeseries")
+    st.plotly_chart(fig_hist, use_container_width=True)
+    
+    st.subheader("Raw Feature Data (Latest 100 Rows)")
+    st.dataframe(history.sort_values("timestamp", ascending=False).head(100), use_container_width=True)

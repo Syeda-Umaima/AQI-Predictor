@@ -47,7 +47,9 @@ def _mongo_client() -> MongoClient:
         tls=True,
         tlsCAFile=ca,
         tlsInsecure=True,
+        connectTimeoutMS=10000,
         serverSelectionTimeoutMS=10000,
+        socketTimeoutMS=15000,
     )
     client.admin.command("ping")
     return client

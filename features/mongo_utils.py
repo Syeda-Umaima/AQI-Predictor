@@ -1,5 +1,6 @@
 """
 Centralized MongoDB Atlas connection and resilience utilities.
+Optimized for Streamlit: low-latency fail-fast and simplified retry.
 """
 import os
 import time
@@ -14,8 +15,11 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(dotenv_path=ROOT / ".env", override=False)
 
-def mongo_retry(max_retries=3, delay=1):
-    """Decorator to retry MongoDB operations on network failure."""
+def mongo_retry(max_retries=2, delay=0.5):
+    """
+    Simplified decorator to retry MongoDB operations on network failure.
+    Optimized for UI responsiveness: fewer retries and shorter delays.
+    """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -27,26 +31,28 @@ def mongo_retry(max_retries=3, delay=1):
                     last_exception = e
                     logger.warning(f"MongoDB operation failed (attempt {attempt + 1}/{max_retries}): {e}")
                     if attempt < max_retries - 1:
-                        time.sleep(delay * (attempt + 1))
-            logger.error(f"MongoDB operation failed after {max_retries} attempts.")
+                        time.sleep(delay)
+            # Log error but let the caller handle the exception or fallback
+            logger.error(f"MongoDB operation exhausted {max_retries} attempts.")
             raise last_exception
         return wrapper
     return decorator
 
 def get_mongo_client() -> MongoClient:
-    """Standardized MongoClient with production resilience parameters."""
+    """Standardized MongoClient with aggressive fail-fast timeouts for UI."""
     uri = os.getenv("MONGO_URI", "").strip()
     if not uri:
         raise EnvironmentError("MONGO_URI is required in .env for database access.")
     
     ca = certifi.where()
+    # Aggressive timeouts to prevent Streamlit UI freezes
     client = MongoClient(
         uri,
         retryWrites=True,
         retryReads=True,
-        serverSelectionTimeoutMS=3000,
-        connectTimeoutMS=3000,
-        socketTimeoutMS=5000,
+        serverSelectionTimeoutMS=2000,  # 2 seconds
+        connectTimeoutMS=2000,          # 2 seconds
+        socketTimeoutMS=5000,           # 5 seconds
         tls=True,
         tlsCAFile=ca,
         tlsInsecure=True 
@@ -54,9 +60,9 @@ def get_mongo_client() -> MongoClient:
     return client
 
 def get_database(db_name="aqi_predictor"):
-    """Get a database instance with connectivity check."""
+    """Get a database instance with instant connectivity check."""
     client = get_mongo_client()
     db = client[db_name]
-    # Ping to verify connectivity
+    # Quick ping to verify connectivity before proceeding
     client.admin.command('ping')
     return db
