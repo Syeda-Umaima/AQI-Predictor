@@ -25,7 +25,7 @@ The **AQI Predictor** is an enterprise-grade MLOps project that automates the en
 
 |               Real-Time Forecast               |            Model Diagnostics & XAI            |
 | :--------------------------------------------: | :-------------------------------------------: |
-| ![Forecast](assets/Real%20Time%20Forecast.png) |            ![XAI](assets/XAI.png)             |
+| ![Forecast](assets/Real%20Time%20Forecast.png) |            ![XAI](assets/Model Diagnostics.png)             |
 |         **Exploratory Data Analysis**          |            **Historical Overview**            |
 |             ![EDA](assets/EDA.png)             | ![Historical](assets/Historical%20Trends.png) |
 
