@@ -38,16 +38,29 @@ def _cfg() -> dict:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-@mongo_retry()
+@mongo_retry(max_retries=3, delay=5.0)
 def load_training_frame() -> pd.DataFrame:
+    """Load features from MongoDB with cursor-based fetching for resilience."""
     db = get_database(MONGO_DB_NAME)
     collection = db[FEATURE_COLLECTION]
-    rows = list(collection.find())
+    
+    logger.info(f"Fetching features from collection: {FEATURE_COLLECTION}...")
+    
+    # Use a cursor and convert to list of dicts. 
+    # find() is lazy; list() triggers the actual fetch.
+    # We use a projection to exclude _id early to save bandwidth/memory.
+    cursor = collection.find({}, {"_id": 0})
+    
+    # Fetch in batches if necessary, but for now, we'll try to convert directly
+    # as pandas handles this reasonably well if the network is stable.
+    rows = list(cursor)
+    
     if not rows:
+        logger.warning("No data found in MongoDB for training.")
         return pd.DataFrame()
+    
     df = pd.DataFrame(rows)
-    if "_id" in df.columns:
-        df = df.drop(columns=["_id"])
+    logger.info(f"Successfully loaded {len(df)} rows.")
     return df
 
 def time_ordered_split(df: pd.DataFrame, test_size: float):

@@ -47,13 +47,15 @@ def push_to_store(df: pd.DataFrame) -> None:
 def load_features() -> pd.DataFrame:
     """Load all engineered features from MongoDB Atlas feature collection."""
     collection = _feature_collection()
-    docs = list(collection.find({}))
+    
+    # Use projection and cursor for efficiency
+    cursor = collection.find({}, {"_id": 0})
+    docs = list(cursor)
+    
     if not docs:
         return pd.DataFrame()
 
     df = pd.DataFrame(docs)
-    if "_id" in df.columns:
-        df = df.drop(columns=["_id"])
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     logger.info(

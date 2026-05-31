@@ -1,12 +1,11 @@
 """
 Centralized MongoDB Atlas connection and resilience utilities.
-Optimized for Streamlit: cached connection pool to prevent socket exhaustion.
+Refactored for dual-mode execution: Headless (CLI/Actions) and Streamlit.
 """
 import os
 import time
 import logging
 import certifi
-import streamlit as st
 from pathlib import Path
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -35,9 +34,6 @@ def mongo_retry(max_retries=3, delay=2.0):
         return wrapper
     return decorator
 
-# Global client cache for non-Streamlit environments
-_CLIENT_CACHE = None
-
 def is_streamlit_running() -> bool:
     """Check if the code is running inside a Streamlit environment."""
     try:
@@ -46,60 +42,58 @@ def is_streamlit_running() -> bool:
     except ImportError:
         return False
 
-def _get_uri() -> str:
-    """Internal helper to resolve MONGO_URI from Secrets or Env."""
-    uri = None
-    try:
-        if "MONGO_URI" in st.secrets:
-            uri = st.secrets["MONGO_URI"].strip()
-    except Exception:
-        pass
+# Global client for non-Streamlit (headless) environments
+_GLOBAL_CLIENT = None
+
+def create_mongo_client() -> MongoClient:
+    """Create a new MongoClient with optimized production parameters."""
+    # 1. Resolve URI
+    uri = os.getenv("MONGO_URI", "").strip()
+    if is_streamlit_running():
+        import streamlit as st
+        try:
+            if "MONGO_URI" in st.secrets:
+                uri = st.secrets["MONGO_URI"].strip()
+        except Exception:
+            pass
     
     if not uri:
-        uri = os.getenv("MONGO_URI", "").strip()
-
-    if not uri:
-        raise EnvironmentError("MONGO_URI is missing in Streamlit Secrets or .env")
-    return uri
-
-def create_mongo_client(uri: str) -> MongoClient:
-    """Create a new MongoClient with production resilience parameters."""
+        raise EnvironmentError("MONGO_URI is missing in Secrets or .env")
+    
     ca = certifi.where()
+    
+    # 2. Configure Client
     return MongoClient(
         uri,
-        serverSelectionTimeoutMS=30000, 
-        connectTimeoutMS=30000,
-        socketTimeoutMS=30000,
+        serverSelectionTimeoutMS=60000, 
+        connectTimeoutMS=60000,
+        socketTimeoutMS=60000,
         retryWrites=True,
         retryReads=True,
         tls=True,
         tlsCAFile=ca,
         tlsInsecure=True,
-        maxPoolSize=10,
-        minPoolSize=1
+        maxPoolSize=50,    # Increased for concurrent GitHub Actions + Streamlit
+        minPoolSize=1,
+        appName="AQI_Predictor_Pipeline",
+        waitQueueTimeoutMS=120000 # Wait longer for a connection from the pool
     )
 
 def get_mongo_client() -> MongoClient:
-    """
-    Standardized MongoClient cached as a global resource.
-    Environment-aware: uses st.cache_resource if in Streamlit, else a global var.
-    """
+    """Entry point for getting a cached MongoClient based on environment."""
     if is_streamlit_running():
-        return _get_cached_client_streamlit()
+        import streamlit as st
+        # Lazy import to avoid streamlit dependency in CLI
+        @st.cache_resource
+        def _get_streamlit_client():
+            return create_mongo_client()
+        return _get_streamlit_client()
     
-    global _CLIENT_CACHE
-    if _CLIENT_CACHE is None:
-        uri = _get_uri()
-        _CLIENT_CACHE = create_mongo_client(uri)
-    return _CLIENT_CACHE
-
-@st.cache_resource
-def _get_cached_client_streamlit() -> MongoClient:
-    """Streamlit-specific cached resource for MongoClient."""
-    uri = _get_uri()
-    return create_mongo_client(uri)
+    global _GLOBAL_CLIENT
+    if _GLOBAL_CLIENT is None:
+        _GLOBAL_CLIENT = create_mongo_client()
+    return _GLOBAL_CLIENT
 
 def get_database(db_name="aqi_predictor"):
-    """Get the cached database instance instantly."""
-    client = get_mongo_client()
-    return client[db_name]
+    """Get the database instance."""
+    return get_mongo_client()[db_name]

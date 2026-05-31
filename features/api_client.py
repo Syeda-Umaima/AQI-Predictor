@@ -39,16 +39,24 @@ class OpenMeteoClient:
         self._om = self._cfg["open_meteo"]
 
     # ------------------------------------------------------------------ HTTP
-    def _get(self, url: str, params: dict) -> dict:
+    def _get(self, url: str, params: dict, timeout: int | None = None) -> dict:
         last_exc: Optional[Exception] = None
+        current_timeout = timeout or self._om["request_timeout_s"]
+        
         for attempt in range(self._om["max_retries"]):
             try:
-                r = requests.get(url, params=params, timeout=self._om["request_timeout_s"])
+                r = requests.get(url, params=params, timeout=current_timeout)
                 r.raise_for_status()
                 return r.json()
             except requests.RequestException as exc:
                 last_exc = exc
                 sleep_s = self._om["backoff_base_s"] ** (attempt + 1)
+                
+                # If it's a timeout, maybe increase it for the next try
+                if isinstance(exc, requests.exceptions.Timeout):
+                    current_timeout += 30
+                    logger.warning("Timeout for %s. Increasing timeout to %ds and retrying...", url, current_timeout)
+                
                 logger.warning("Request to %s failed (%s). Retry in %.1fs", url, exc, sleep_s)
                 time.sleep(sleep_s)
         raise RuntimeError(f"Open-Meteo request failed after retries: {last_exc}")
@@ -98,7 +106,8 @@ class OpenMeteoClient:
             "start_date": start_date,
             "end_date": end_date,
         }
-        data = self._get(self._om["weather_archive_url"], params)
+        # Use a higher initial timeout for the archive API (90s)
+        data = self._get(self._om["weather_archive_url"], params, timeout=90)
         return self._parse_hourly(data)
 
     # -------------------------------------------------------- Air quality
@@ -131,7 +140,8 @@ class OpenMeteoClient:
             "start_date": start_date,
             "end_date": end_date,
         }
-        data = self._get(self._om["air_quality_url"], params)
+        # Use a higher initial timeout for the archive API (90s)
+        data = self._get(self._om["air_quality_url"], params, timeout=90)
         return self._parse_hourly(data)
 
     # -------------------------------------------------------- Combined
@@ -162,6 +172,8 @@ class OpenMeteoClient:
                     end_date=chunk_end.isoformat(),
                 )
             )
+            time.sleep(0.5)  # Small delay to avoid API throttling
+
         weather = (
             pd.concat(weather_frames, ignore_index=True)
             .drop_duplicates("timestamp")
@@ -178,6 +190,7 @@ class OpenMeteoClient:
                         end_date=chunk_end.isoformat(),
                     )
                 )
+                time.sleep(0.5)  # Small delay to avoid API throttling
             aq = (
                 pd.concat(air_quality_frames, ignore_index=True)
                 .drop_duplicates("timestamp")

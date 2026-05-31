@@ -32,8 +32,8 @@ open_meteo:
     - us_aqi
 
 backfill:
-  days: 30
-  chunk_days: 7
+  days: 730
+  chunk_days: 30
 
 features:
   pollutants:
