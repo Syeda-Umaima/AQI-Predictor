@@ -40,20 +40,24 @@ def _cfg() -> dict:
 
 @mongo_retry(max_retries=3, delay=5.0)
 def load_training_frame() -> pd.DataFrame:
-    """Load features from MongoDB with cursor-based fetching for resilience."""
+    """Load features from MongoDB with iterative fetching for maximum resilience."""
     db = get_database(MONGO_DB_NAME)
     collection = db[FEATURE_COLLECTION]
     
     logger.info(f"Fetching features from collection: {FEATURE_COLLECTION}...")
     
-    # Use a cursor and convert to list of dicts. 
-    # find() is lazy; list() triggers the actual fetch.
-    # We use a projection to exclude _id early to save bandwidth/memory.
-    cursor = collection.find({}, {"_id": 0})
+    # Use a projection to exclude _id early and set a reasonable batch size
+    cursor = collection.find({}, {"_id": 0}).batch_size(2000)
     
-    # Fetch in batches if necessary, but for now, we'll try to convert directly
-    # as pandas handles this reasonably well if the network is stable.
-    rows = list(cursor)
+    rows = []
+    try:
+        for i, doc in enumerate(cursor):
+            rows.append(doc)
+            if (i + 1) % 5000 == 0:
+                logger.info(f"Loaded {i + 1} rows so far...")
+    except Exception as e:
+        logger.error(f"Error during iterative cursor fetch: {e}")
+        raise
     
     if not rows:
         logger.warning("No data found in MongoDB for training.")

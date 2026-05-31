@@ -65,9 +65,9 @@ def create_mongo_client() -> MongoClient:
     # 2. Configure Client
     return MongoClient(
         uri,
-        serverSelectionTimeoutMS=60000, 
-        connectTimeoutMS=60000,
-        socketTimeoutMS=60000,
+        serverSelectionTimeoutMS=120000, 
+        connectTimeoutMS=120000,
+        socketTimeoutMS=120000,
         retryWrites=True,
         retryReads=True,
         tls=True,
@@ -76,7 +76,10 @@ def create_mongo_client() -> MongoClient:
         maxPoolSize=50,    # Increased for concurrent GitHub Actions + Streamlit
         minPoolSize=1,
         appName="AQI_Predictor_Pipeline",
-        waitQueueTimeoutMS=120000 # Wait longer for a connection from the pool
+        waitQueueTimeoutMS=120000, # Wait longer for a connection from the pool
+        heartbeatFrequencyMS=10000, # More frequent heartbeats to keep connection alive
+        compressors="snappy,zlib",   # Enable compression for large data transfers
+        zlibCompressionLevel=3
     )
 
 def get_mongo_client() -> MongoClient:

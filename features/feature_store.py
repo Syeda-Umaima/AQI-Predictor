@@ -45,17 +45,24 @@ def push_to_store(df: pd.DataFrame) -> None:
 
 @mongo_retry()
 def load_features() -> pd.DataFrame:
-    """Load all engineered features from MongoDB Atlas feature collection."""
+    """Load all engineered features from MongoDB Atlas with iterative fetching."""
     collection = _feature_collection()
     
-    # Use projection and cursor for efficiency
-    cursor = collection.find({}, {"_id": 0})
-    docs = list(cursor)
+    # Use projection, batch size, and iterative fetch for maximum resilience
+    cursor = collection.find({}, {"_id": 0}).batch_size(2000)
     
-    if not docs:
+    rows = []
+    try:
+        for doc in cursor:
+            rows.append(doc)
+    except Exception as e:
+        logger.error(f"Error during iterative feature fetch: {e}")
+        raise
+    
+    if not rows:
         return pd.DataFrame()
 
-    df = pd.DataFrame(docs)
+    df = pd.DataFrame(rows)
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     logger.info(
