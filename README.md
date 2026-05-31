@@ -2,6 +2,11 @@
 
 Professional end-to-end machine learning pipeline for real-time Air Quality Index (AQI) forecasting. This system provides a 72-hour recursive forecast for Hyderabad, Pakistan, utilizing a fully cloud-native, production-ready stack.
 
+## 🌐 Live Application
+
+Explore the real-time dashboard and predictive analytics here:  
+**[AQI Predictor — Hyderabad Live Dashboard](https://aqi-predictor-hyd-sindh.streamlit.app/)**
+
 ## 🚀 Project Overview
 
 The **AQI Predictor** is an enterprise-grade MLOps project that automates the entire lifecycle of a machine learning model—from data ingestion and feature engineering to model training, evaluation, and live deployment. The system is designed to be resilient, scalable, and highly transparent through Explainable AI (XAI).
