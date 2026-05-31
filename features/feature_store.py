@@ -48,8 +48,8 @@ def load_features() -> pd.DataFrame:
     """Load all engineered features from MongoDB Atlas with iterative fetching."""
     collection = _feature_collection()
     
-    # Use projection, batch size, and iterative fetch for maximum resilience
-    cursor = collection.find({}, {"_id": 0}).batch_size(2000)
+    # Use projection, smaller batch size (500), and iterative fetch for maximum resilience
+    cursor = collection.find({}, {"_id": 0}).batch_size(500)
     
     rows = []
     try:

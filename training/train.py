@@ -40,14 +40,23 @@ def _cfg() -> dict:
 
 @mongo_retry(max_retries=3, delay=5.0)
 def load_training_frame() -> pd.DataFrame:
-    """Load features from MongoDB with iterative fetching for maximum resilience."""
+    """Load features from MongoDB with iterative fetching and optimized projection."""
     db = get_database(MONGO_DB_NAME)
     collection = db[FEATURE_COLLECTION]
     
     logger.info(f"Fetching features from collection: {FEATURE_COLLECTION}...")
     
-    # Use a projection to exclude _id early and set a reasonable batch size
-    cursor = collection.find({}, {"_id": 0}).batch_size(2000)
+    # EXTREME OPTIMIZATION: Exclude raw pollutants and internal fields we don't use in training.
+    # This reduces payload size by ~50%.
+    projection = {
+        "_id": 0,
+        "pm2_5": 0, "pm10": 0, "carbon_monoxide": 0, 
+        "nitrogen_dioxide": 0, "sulphur_dioxide": 0, 
+        "ozone": 0, "dust": 0, "us_aqi": 0, "target_aqi_next_72h": 0
+    }
+    
+    # Use a projection and set a smaller batch size (500) for more frequent network handshakes
+    cursor = collection.find({}, projection).batch_size(500)
     
     rows = []
     try:
