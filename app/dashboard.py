@@ -243,7 +243,7 @@ champion["champion"] = best_model_name
 
 if page == "Real-Time Forecast":
     st.title("🌫️ Real-Time AQI Forecast")
-    st.caption("Note: Predictions are based on regional satellite data (Open-Meteo) and may slightly differ from hyper-local ground sensors.")
+    # st.caption("Note: Predictions are based on regional satellite data (Open-Meteo) and may slightly differ from hyper-local ground sensors.")
     
     with st.spinner("Generating 72-hour recursive forecast..."):
         client = OpenMeteoClient()
