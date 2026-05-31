@@ -38,8 +38,12 @@ def mongo_retry(max_retries=2, delay=1.0):
         return wrapper
     return decorator
 
+@st.cache_resource
 def get_mongo_client() -> MongoClient:
-    """Standardized MongoClient that prioritizes Streamlit Secrets over local envs."""
+    """
+    Standardized MongoClient cached as a single global resource.
+    Prevents connection leakage and socket exhaustion on MongoDB Atlas.
+    """
     # 1. Look for Streamlit Cloud Secret first; fall back to local .env if running locally
     if "MONGO_URI" in st.secrets:
         uri = st.secrets["MONGO_URI"].strip()
@@ -51,10 +55,10 @@ def get_mongo_client() -> MongoClient:
     
     ca = certifi.where()
     
-    # 2. Relaxed timeouts to accommodate high-capacity (81%) free-tier cluster handshakes
+    # 2. Reusable client configuration with robust safety timeouts
     client = MongoClient(
         uri,
-        serverSelectionTimeoutMS=30000,  # Raised to 30s to allow cold-starts from cloud
+        serverSelectionTimeoutMS=30000,  # Allow time for cloud environments to handshake
         connectTimeoutMS=30000,
         socketTimeoutMS=30000,
         tlsCAFile=ca,                    # Uses secure certifi certificate chain
@@ -62,9 +66,6 @@ def get_mongo_client() -> MongoClient:
     return client
 
 def get_database(db_name="aqi_predictor"):
-    """Get a database instance with instant connectivity check."""
+    """Get the cached database instance instantly without duplicate overhead."""
     client = get_mongo_client()
-    db = client[db_name]
-    # Quick ping to verify connectivity before proceeding
-    client.admin.command('ping')
-    return db
+    return client[db_name]
