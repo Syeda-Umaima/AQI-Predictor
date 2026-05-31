@@ -89,6 +89,4 @@ python -m training.evaluate             # Generate XAI Artifacts
 streamlit run app/dashboard.py          # Launch Dashboard
 ```
 
----
 
-_Developed as a Production-Grade MLOps Project for 10Pearls Internship._
