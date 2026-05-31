@@ -23,6 +23,7 @@ from pymongo import MongoClient
 from features.api_client import OpenMeteoClient
 from features.feature_engineering import build_feature_frame, count_feature_columns
 from features.synthetic_data import generate_synthetic_raw
+from features.mongo_utils import get_mongo_client
 from training.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -37,22 +38,7 @@ def _cfg() -> dict:
 
 
 def _mongo_client() -> MongoClient:
-    uri = os.getenv("MONGO_URI", "").strip()
-    if not uri:
-        raise RuntimeError("MONGO_URI is required in .env for MongoDB backfill.")
-
-    ca = certifi.where()
-    client = MongoClient(
-        uri,
-        tls=True,
-        tlsCAFile=ca,
-        tlsInsecure=True,
-        connectTimeoutMS=10000,
-        serverSelectionTimeoutMS=10000,
-        socketTimeoutMS=15000,
-    )
-    client.admin.command("ping")
-    return client
+    return get_mongo_client()
 
 
 def _mongo_collection():

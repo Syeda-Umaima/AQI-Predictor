@@ -1,6 +1,6 @@
 """
 Centralized MongoDB Atlas connection and resilience utilities.
-Optimized for Streamlit: low-latency fail-fast and simplified retry.
+Optimized for Streamlit: cached connection pool to prevent socket exhaustion.
 """
 import os
 import time
@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(dotenv_path=ROOT / ".env", override=False)
 
-def mongo_retry(max_retries=2, delay=1.0):
+def mongo_retry(max_retries=3, delay=2.0):
     """
-    Simplified decorator to retry MongoDB operations on network failure.
-    Optimized for UI responsiveness: fewer retries and shorter delays.
+    Retry decorator for MongoDB operations.
+    Increased delay and retries for cloud environments.
     """
     def decorator(func):
         @wraps(func)
@@ -44,28 +44,42 @@ def get_mongo_client() -> MongoClient:
     Standardized MongoClient cached as a single global resource.
     Prevents connection leakage and socket exhaustion on MongoDB Atlas.
     """
-    # 1. Look for Streamlit Cloud Secret first; fall back to local .env if running locally
-    if "MONGO_URI" in st.secrets:
-        uri = st.secrets["MONGO_URI"].strip()
-    else:
+    # 1. Prioritize Streamlit Cloud Secrets, fallback to .env
+    uri = None
+    try:
+        if "MONGO_URI" in st.secrets:
+            uri = st.secrets["MONGO_URI"].strip()
+    except Exception:
+        pass
+    
+    if not uri:
         uri = os.getenv("MONGO_URI", "").strip()
 
     if not uri:
-        raise EnvironmentError("MONGO_URI is required in Streamlit Secrets or .env file.")
+        raise EnvironmentError("MONGO_URI is missing in Secrets or .env")
     
     ca = certifi.where()
     
-    # 2. Reusable client configuration with robust safety timeouts
+    # 2. Production-grade client with robust timeouts and TLS settings
+    # We use 'Goldilocks' timeouts: long enough for handshakes, short enough to not lock UI.
     client = MongoClient(
         uri,
-        serverSelectionTimeoutMS=30000,  # Allow time for cloud environments to handshake
-        connectTimeoutMS=30000,
-        socketTimeoutMS=30000,
-        tlsCAFile=ca,                    # Uses secure certifi certificate chain
+        serverSelectionTimeoutMS=15000, 
+        connectTimeoutMS=15000,
+        socketTimeoutMS=20000,
+        retryWrites=True,
+        retryReads=True,
+        tls=True,
+        tlsCAFile=ca,
+        tlsInsecure=True, # Added to bypass potential cert validation issues in cloud runners
+        maxPoolSize=10,    # Limit pool size per worker to prevent Atlas connection spikes
+        minPoolSize=1
     )
     return client
 
+@st.cache_resource
 def get_database(db_name="aqi_predictor"):
     """Get the cached database instance instantly without duplicate overhead."""
     client = get_mongo_client()
-    return client[db_name]
+    db = client[db_name]
+    return db
