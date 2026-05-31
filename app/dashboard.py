@@ -109,16 +109,19 @@ def _load_feature_store_cached():
 @st.cache_data(ttl=900)
 def _fetch_xai_image(run_id: str, filename: str):
     """Securely fetch XAI plots from GridFS with verification."""
-    if not run_id or run_id == "Unknown Run":
+    if not run_id or run_id == "Unknown Run" or not isinstance(run_id, str):
         return None
     try:
         db = get_database(MONGO_DB_NAME)
         fs = gridfs.GridFS(db)
+        # Search in fs.files first to get the _id
         file_doc = db["fs.files"].find_one({"run_id": run_id, "filename": filename})
         if file_doc:
-            return fs.get(file_doc["_id"]).read()
-    except Exception:
-        pass
+            data = fs.get(file_doc["_id"]).read()
+            if data and len(data) > 0:
+                return data
+    except Exception as e:
+        logger.error(f"Error fetching XAI image {filename} for run {run_id}: {e}")
     return None
 
 # --- Prediction & Logic ---
@@ -205,6 +208,13 @@ def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.Dat
 
 # --- Sidebar ---
 st.sidebar.markdown("### 🌫️ AQI Predictor")
+st.sidebar.markdown("---")
+
+if st.sidebar.button("🔄 Clear Cache & Refresh"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("**US AQI Scale Guide**")
 st.sidebar.markdown(
@@ -315,19 +325,25 @@ elif page == "Model Diagnostics & XAI":
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**SHAP Global Importance**")
-            shap_bytes = _fetch_xai_image(run_id, "shap_summary.png")
-            if shap_bytes:
-                st.image(shap_bytes, use_container_width=True)
-            else:
-                st.info("SHAP plot not found for this training run. They will generate on the next training cycle.")
+            try:
+                shap_bytes = _fetch_xai_image(run_id, "shap_summary.png")
+                if shap_bytes is not None:
+                    st.image(shap_bytes, use_container_width=True)
+                else:
+                    st.info("SHAP plot not found for this training run. They will generate on the next training cycle.")
+            except Exception as e:
+                st.error(f"Error displaying SHAP: {e}")
         
         with col2:
             st.markdown("**LIME Local Explanation**")
-            lime_bytes = _fetch_xai_image(run_id, "lime_explanation.png")
-            if lime_bytes:
-                st.image(lime_bytes, use_container_width=True)
-            else:
-                st.info("LIME plot not found for this training run. They will generate on the next training cycle.")
+            try:
+                lime_bytes = _fetch_xai_image(run_id, "lime_explanation.png")
+                if lime_bytes is not None:
+                    st.image(lime_bytes, use_container_width=True)
+                else:
+                    st.info("LIME plot not found for this training run. They will generate on the next training cycle.")
+            except Exception as e:
+                st.error(f"Error displaying LIME: {e}")
 
 else:
     st.title("📅 Historical Overview")

@@ -53,12 +53,29 @@ def _build_predict_fn(name: str, model, scaler, cols: list[str], use_log_y: bool
         return preds
     return predict_fn
 
-@mongo_retry()
+@mongo_retry(max_retries=3, delay=5.0)
 def persist_xai_artifact(buf: io.BytesIO, filename: str, run_id: str):
-    """Save XAI plots to GridFS."""
+    """Save XAI plots to GridFS with verification."""
+    if buf.getbuffer().nbytes == 0:
+        logger.error(f"Cannot persist empty buffer for {filename}")
+        return
+
     db = get_database(MONGO_DB_NAME)
     fs = gridfs.GridFS(db)
-    fs.put(buf.getvalue(), filename=filename, run_id=run_id, type="xai_plot")
+    
+    # Check if a file with this run_id and filename already exists and delete it
+    existing = db["fs.files"].find_one({"run_id": run_id, "filename": filename})
+    if existing:
+        fs.delete(existing["_id"])
+    
+    file_id = fs.put(
+        buf.getvalue(), 
+        filename=filename, 
+        run_id=run_id, 
+        type="xai_plot",
+        timestamp=datetime.datetime.utcnow()
+    )
+    logger.info(f"Persisted {filename} to GridFS (ID: {file_id}, Size: {buf.getbuffer().nbytes} bytes)")
 
 def run_shap(name: str, model, scaler, meta: dict, X_test: pd.DataFrame, run_id: str) -> None:
     cols = meta["feature_columns"]
