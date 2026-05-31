@@ -8,9 +8,9 @@ open_meteo:
   weather_url: "https://api.open-meteo.com/v1/forecast"
   weather_archive_url: "https://archive-api.open-meteo.com/v1/archive"
   air_quality_url: "https://air-quality-api.open-meteo.com/v1/air-quality"
-  request_timeout_s: 30
-  max_retries: 4
-  backoff_base_s: 1.5
+  request_timeout_s: 60
+  max_retries: 5
+  backoff_base_s: 2.0
   weather_hourly_vars:
     - temperature_2m
     - relative_humidity_2m

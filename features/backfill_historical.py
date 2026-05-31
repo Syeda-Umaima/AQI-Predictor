@@ -91,11 +91,22 @@ def run_backfill() -> pd.DataFrame:
     )
 
     collection = _mongo_collection()
-    logger.info("Dropping existing MongoDB collection 'features_v2' before backfill.")
-    collection.drop()
+    logger.info("Cleaning up existing data in 'features_v2'...")
+    try:
+        collection.delete_many({})
+    except Exception as e:
+        logger.warning(f"Initial cleanup failed: {e}. Attempting drop...")
+        collection.drop()
+
     if not features.empty:
-        collection.insert_many(features.to_dict("records"))
-    logger.info("Inserted %d rows into MongoDB collection 'features_v2'.", len(features))
+        docs = features.to_dict("records")
+        chunk_size = 500  # Smaller chunks to prevent socket timeouts
+        for i in range(0, len(docs), chunk_size):
+            chunk = docs[i:i + chunk_size]
+            collection.insert_many(chunk)
+            logger.info("Inserted chunk %d to %d...", i, min(i + chunk_size, len(docs)))
+            
+    logger.info("Inserted %d total rows into MongoDB collection 'features_v2'.", len(features))
     logger.info("Backfill complete.")
     return features
 

@@ -17,10 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(dotenv_path=ROOT / ".env", override=False)
 
 def mongo_retry(max_retries=3, delay=2.0):
-    """
-    Retry decorator for MongoDB operations.
-    Increased delay and retries for cloud environments.
-    """
+    """Decorator to retry MongoDB operations on network failure."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -38,13 +35,19 @@ def mongo_retry(max_retries=3, delay=2.0):
         return wrapper
     return decorator
 
-@st.cache_resource
-def get_mongo_client() -> MongoClient:
-    """
-    Standardized MongoClient cached as a single global resource.
-    Prevents connection leakage and socket exhaustion on MongoDB Atlas.
-    """
-    # 1. Prioritize Streamlit Cloud Secrets, fallback to .env
+# Global client cache for non-Streamlit environments
+_CLIENT_CACHE = None
+
+def is_streamlit_running() -> bool:
+    """Check if the code is running inside a Streamlit environment."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except ImportError:
+        return False
+
+def _get_uri() -> str:
+    """Internal helper to resolve MONGO_URI from Secrets or Env."""
     uri = None
     try:
         if "MONGO_URI" in st.secrets:
@@ -56,30 +59,47 @@ def get_mongo_client() -> MongoClient:
         uri = os.getenv("MONGO_URI", "").strip()
 
     if not uri:
-        raise EnvironmentError("MONGO_URI is missing in Secrets or .env")
-    
+        raise EnvironmentError("MONGO_URI is missing in Streamlit Secrets or .env")
+    return uri
+
+def create_mongo_client(uri: str) -> MongoClient:
+    """Create a new MongoClient with production resilience parameters."""
     ca = certifi.where()
-    
-    # 2. Production-grade client with robust timeouts and TLS settings
-    # We use 'Goldilocks' timeouts: long enough for handshakes, short enough to not lock UI.
-    client = MongoClient(
+    return MongoClient(
         uri,
-        serverSelectionTimeoutMS=15000, 
-        connectTimeoutMS=15000,
-        socketTimeoutMS=20000,
+        serverSelectionTimeoutMS=30000, 
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
         retryWrites=True,
         retryReads=True,
         tls=True,
         tlsCAFile=ca,
-        tlsInsecure=True, # Added to bypass potential cert validation issues in cloud runners
-        maxPoolSize=10,    # Limit pool size per worker to prevent Atlas connection spikes
+        tlsInsecure=True,
+        maxPoolSize=10,
         minPoolSize=1
     )
-    return client
+
+def get_mongo_client() -> MongoClient:
+    """
+    Standardized MongoClient cached as a global resource.
+    Environment-aware: uses st.cache_resource if in Streamlit, else a global var.
+    """
+    if is_streamlit_running():
+        return _get_cached_client_streamlit()
+    
+    global _CLIENT_CACHE
+    if _CLIENT_CACHE is None:
+        uri = _get_uri()
+        _CLIENT_CACHE = create_mongo_client(uri)
+    return _CLIENT_CACHE
 
 @st.cache_resource
+def _get_cached_client_streamlit() -> MongoClient:
+    """Streamlit-specific cached resource for MongoClient."""
+    uri = _get_uri()
+    return create_mongo_client(uri)
+
 def get_database(db_name="aqi_predictor"):
-    """Get the cached database instance instantly without duplicate overhead."""
+    """Get the cached database instance instantly."""
     client = get_mongo_client()
-    db = client[db_name]
-    return db
+    return client[db_name]
