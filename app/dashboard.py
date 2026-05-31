@@ -209,13 +209,6 @@ def _build_recursive_forecast(champion: dict, raw: pd.DataFrame, history: pd.Dat
 # --- Sidebar ---
 st.sidebar.markdown("### 🌫️ AQI Predictor")
 st.sidebar.markdown("---")
-
-if st.sidebar.button("🔄 Clear Cache & Refresh"):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    st.rerun()
-
-st.sidebar.markdown("---")
 st.sidebar.markdown("**US AQI Scale Guide**")
 st.sidebar.markdown(
     """
@@ -328,7 +321,7 @@ elif page == "Model Diagnostics & XAI":
             try:
                 shap_bytes = _fetch_xai_image(run_id, "shap_summary.png")
                 if shap_bytes is not None:
-                    st.image(shap_bytes, use_container_width=True)
+                    st.image(shap_bytes, use_column_width=True)
                 else:
                     st.info("SHAP plot not found for this training run. They will generate on the next training cycle.")
             except Exception as e:
@@ -339,7 +332,7 @@ elif page == "Model Diagnostics & XAI":
             try:
                 lime_bytes = _fetch_xai_image(run_id, "lime_explanation.png")
                 if lime_bytes is not None:
-                    st.image(lime_bytes, use_container_width=True)
+                    st.image(lime_bytes, use_column_width=True)
                 else:
                     st.info("LIME plot not found for this training run. They will generate on the next training cycle.")
             except Exception as e:
