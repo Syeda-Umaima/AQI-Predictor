@@ -55,7 +55,6 @@ def get_mongo_client() -> MongoClient:
         socketTimeoutMS=15000,
         tls=True,
         tlsCAFile=ca,
-        tlsInsecure=True 
     )
     return client
 
