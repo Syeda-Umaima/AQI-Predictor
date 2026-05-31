@@ -20,6 +20,10 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 import lightgbm as lgb
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras.callbacks import EarlyStopping
 
 from features.mongo_utils import get_database, mongo_retry
 
@@ -102,8 +106,15 @@ def score(y_true, y_pred) -> dict:
 @mongo_retry()
 def persist_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     """Stream champion model and metadata directly to MongoDB GridFS."""
-    champ_name = min(leaderboard, key=lambda k: leaderboard[k]["metrics"]["rmse"])
-    champ = leaderboard[champ_name]
+    # Filter for models that can be serialized with joblib (exclude TensorFlow for champion status)
+    joblib_models = {k: v for k, v in leaderboard.items() if not v.get("is_tf")}
+    
+    if not joblib_models:
+        logger.error("No joblib-compatible models found to persist as champion.")
+        return ""
+
+    champ_name = min(joblib_models, key=lambda k: joblib_models[k]["metrics"]["rmse"])
+    champ = joblib_models[champ_name]
     
     artifact = {
         "model": champ["model"],
@@ -132,7 +143,7 @@ def persist_champion(leaderboard: dict, feature_cols: list[str]) -> str:
         timestamp=timestamp
     )
     
-    # Prepare metadata for upsert
+    # Prepare metadata for upsert (includes ALL metrics including TensorFlow)
     meta = {
         "champion": champ_name,
         "metrics": champ["metrics"],
@@ -155,6 +166,18 @@ def persist_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     
     logger.info(f"Champion '{champ_name}' persisted to Cloud. RunID: {run_id}")
     return champ_name
+
+def build_tf_model(input_dim: int):
+    """Build a simple Deep Learning MLP for regression."""
+    model = Sequential([
+        Input(shape=(input_dim,)),
+        Dense(64, activation='relu'),
+        Dropout(0.2),
+        Dense(32, activation='relu'),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    return model
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -200,6 +223,34 @@ def main():
         preds = np.expm1(model.predict(Xv))
         leaderboard[name] = {"model": model, "scaler": scaler, "metrics": score(y_test, preds), "use_log_y": True}
     
+    # Deep Learning (TensorFlow) Support
+    try:
+        logger.info("Training Deep Learning model (TensorFlow)...")
+        scaler_tf = StandardScaler().fit(X_train)
+        Xt_tf = scaler_tf.transform(X_train)
+        Xv_tf = scaler_tf.transform(X_test)
+        
+        tf_model = build_tf_model(X_train.shape[1])
+        tf_model.fit(
+            Xt_tf, np.log1p(y_train),
+            epochs=20, batch_size=32, verbose=0,
+            validation_split=0.1,
+            callbacks=[EarlyStopping(patience=3, restore_best_weights=True)]
+        )
+        
+        tf_preds = np.expm1(tf_model.predict(Xv_tf).flatten())
+        leaderboard["tensorflow"] = {
+            "model": tf_model, 
+            "scaler": scaler_tf, 
+            "metrics": score(y_test, tf_preds), 
+            "use_log_y": True,
+            "is_tf": True
+        }
+        logger.info(f"TensorFlow metrics: {leaderboard['tensorflow']['metrics']}")
+    except Exception as e:
+        logger.warning(f"TensorFlow training failed (skipping): {e}")
+
+    # Persist champion and save all leaderboard metrics
     persist_champion(leaderboard, cols)
 
 if __name__ == "__main__":

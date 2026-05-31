@@ -6,80 +6,89 @@ Professional end-to-end machine learning pipeline for real-time Air Quality Inde
 
 The **AQI Predictor** is an enterprise-grade MLOps project that automates the entire lifecycle of a machine learning model—from data ingestion and feature engineering to model training, evaluation, and live deployment. The system is designed to be resilient, scalable, and highly transparent through Explainable AI (XAI).
 
-### **Core Architecture**
+### **Key Features**
 
-- **Automated Ingestion**: GitHub Actions trigger hourly pipelines to fetch meteorological and pollutant data from the **Open-Meteo API**.
-- **Feature Store**: All engineered features (lags, rolling windows, atmospheric interactions) are persisted in **MongoDB Atlas**.
-- **Recursive Forecasting**: A 1-hour ahead predictive model is used recursively to generate a robust 72-hour forecast, dynamically handling atmospheric drift.
-- **Dynamic Routing**: The production dashboard evaluates all registered models (XGBoost, LightGBM, Random Forest, etc.) against the latest live data point and automatically routes traffic to the specific model with the lowest real-time error.
-- **Cloud Model Registry**: Trained model binaries and XAI artifacts (SHAP/LIME) are stored in **MongoDB GridFS** for instant global availability.
+- **Feature Pipeline Development**: Automated ingestion of weather and pollutant data from Open-Meteo API.
+- **Historical Data Backfill**: 2-year comprehensive historical dataset generation (730 days) for robust training.
+- **Multi-Model Training Pipeline**: Automated training and evaluation of Ridge, XGBoost, LightGBM, and Deep Learning (TensorFlow) models.
+- **Cloud Feature Store & Registry**: Centralized MongoDB Atlas storage for features and GridFS for model artifacts.
+- **Explainable AI (XAI)**: Global (SHAP) and Local (LIME) interpretations persisted to the cloud and rendered in real-time.
+- **Automated CI/CD**: Hourly feature ingestion and daily model retraining via GitHub Actions.
+- **Production Dashboard**: Interactive Streamlit UI with dynamic model routing and hazardous AQI alerts.
+
+## 📸 Dashboard Gallery
+
+|               Real-Time Forecast               |            Model Diagnostics & XAI            |
+| :--------------------------------------------: | :-------------------------------------------: |
+| ![Forecast](assets/Real%20Time%20Forecast.png) |            ![XAI](assets/XAI.png)             |
+|         **Exploratory Data Analysis**          |            **Historical Overview**            |
+|             ![EDA](assets/EDA.png)             | ![Historical](assets/Historical%20Trends.png) |
+
+<details>
+<summary>View More Screenshots</summary>
+
+|             Analysis             |                 Forecast Table                 |
+| :------------------------------: | :--------------------------------------------: |
+| ![Analysis](assets/Analysis.png) | ![Table](assets/Forecast%20Detail%20Table.png) |
+
+</details>
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: [Streamlit](https://streamlit.io/) (Optimized with advanced caching and responsive UI)
-- **Database**: [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (Feature Store & Model Registry)
-- **ML Frameworks**: Scikit-learn, XGBoost, LightGBM
-- **XAI**: SHAP, LIME (Global and local interpretability)
-- **Orchestration**: GitHub Actions (CI/CD)
+- **Frontend**: [Streamlit](https://streamlit.io/) (High-performance caching & responsive design)
+- **Database**: [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (Serverless Feature Store & Model Registry)
+- **ML/DL Frameworks**: Scikit-learn, XGBoost, LightGBM, **TensorFlow** (MLP Architecture)
+- **Explainability**: SHAP, LIME
+- **Orchestration**: GitHub Actions (CI/CD Pipelines)
 - **Data Source**: Open-Meteo Satellite & Ground Station API
+
+## 📊 Project Audit Status
+
+| Requirement             | Status | Details                                                          |
+| :---------------------- | :----: | :--------------------------------------------------------------- |
+| **Serverless Stack**    |   ✅   | GitHub Actions + MongoDB Atlas + Streamlit Cloud                 |
+| **Feature Pipeline**    |   ✅   | Hourly automated ingestion with 80+ engineered features          |
+| **Historical Backfill** |   ✅   | 2-year historical data ingestion completed                       |
+| **Training Pipeline**   |   ✅   | Daily retraining with champion model promotion                   |
+| **Model Diversity**     |   ✅   | Statistical (Ridge), Boosting (XGB/LGBM), and Deep Learning (TF) |
+| **Explainability**      |   ✅   | Integrated SHAP Summary and LIME Explanations                    |
+| **CI/CD Automation**    |   ✅   | 100% automated via YAML workflows                                |
+| **Real-Time Dashboard** |   ✅   | 72-hour recursive forecast with live drift metrics               |
 
 ## 📖 Local Setup & Development
 
 ### 1. Prerequisites
 
 - Python 3.11+
-- A MongoDB Atlas Cluster (Free Tier is sufficient)
+- MongoDB Atlas Cluster (Free Tier)
 
 ### 2. Installation
 
 ```bash
-# Clone the repository
 git clone <your-repo-url>
 cd aqi-predictor
-
-# Create and activate virtual environment
 python -m venv .venv
-# Windows:
-.\.venv\Scripts\Activate.ps1
-# Mac/Linux:
-source .venv/bin/activate
-
-# Install requirements
+# Activate: .\.venv\Scripts\Activate (Win) or source .venv/bin/activate (Unix)
 pip install -r requirements.txt
 ```
 
 ### 3. Environment Configuration
 
-Create a `.env` file in the root directory and add your MongoDB connection string:
+Create a `.env` file:
 
 ```env
-MONGO_URI=mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?retryWrites=true&w=majority
+MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/aqi_predictor
 ```
 
-### 4. Running the Pipelines
+### 4. Execution
 
 ```bash
-# Seed the Feature Store with historical data
-python -m features.backfill_historical
-
-# Train models and push champion to Cloud
-python -m training.train
-
-# Generate XAI diagnostics
-python -m training.evaluate
-
-# Launch the Dashboard
-streamlit run app/dashboard.py
+python -m features.backfill_historical  # Backfill 2 years
+python -m training.train                # Train & Select Champion
+python -m training.evaluate             # Generate XAI Artifacts
+streamlit run app/dashboard.py          # Launch Dashboard
 ```
-
-## 🌐 Deployment
-
-This project is configured for continuous deployment to **Hugging Face Spaces**.
-
-- GitHub Actions automatically update the Cloud Feature Store every hour.
-- The dashboard pulls the latest "Champion" model and XAI plots directly from MongoDB GridFS.
-- **Zero-Downtime Retraining**: When the daily training pipeline promotes a new champion, the dashboard reflects the update instantly without a restart.
 
 ---
 
-_Note: Predictions are based on regional satellite data and may differ from hyper-local ground sensors._
+_Developed as a Production-Grade MLOps Project for 10Pearls Internship._
