@@ -165,6 +165,32 @@ def persist_champion(leaderboard: dict, feature_cols: list[str]) -> str:
     db[MODEL_METADATA_COLLECTION].insert_one({**meta, "type": "history"})
     
     logger.info(f"Champion '{champ_name}' persisted to Cloud. RunID: {run_id}")
+
+    # Automated storage pruning to restrict historical logs to MAX_RETAINED_RUNS
+    try:
+        MAX_RETAINED_RUNS = 3
+        # Query for history documents sorted by timestamp ascending (oldest first)
+        history_docs = list(db[MODEL_METADATA_COLLECTION].find({"type": "history"}).sort("timestamp", 1))
+        
+        if len(history_docs) > MAX_RETAINED_RUNS:
+            overflow = history_docs[:len(history_docs) - MAX_RETAINED_RUNS]
+            for doc in overflow:
+                old_run_id = doc.get("run_id")
+                # 1. Delete model binary from GridFS
+                if "file_id" in doc:
+                    fs.delete(doc["file_id"])
+                
+                # 2. Delete companion XAI images matching this run_id
+                if old_run_id:
+                    for f in db["fs.files"].find({"run_id": old_run_id}, {"_id": 1}):
+                        fs.delete(f["_id"])
+                
+                # 3. Delete the history tracking document
+                db[MODEL_METADATA_COLLECTION].delete_one({"_id": doc["_id"]})
+                logger.info(f"Storage Pruning: Removed old run {old_run_id} to save space.")
+    except Exception as e:
+        logger.warning(f"Storage pruning encountered an error: {e}")
+
     return champ_name
 
 def build_tf_model(input_dim: int):
