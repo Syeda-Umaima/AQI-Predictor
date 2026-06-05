@@ -25,27 +25,27 @@ The **AQI Predictor** is an enterprise-grade MLOps project that automates the en
 
 ### Real-Time Forecast
 
-|                      Real Time Forecast 1                      |                      Real Time Forecast 2                      |
-| :------------------------------------------------------------: | :------------------------------------------------------------: |
-| ![Real Time Forecast 1](assets/Real%20Time%20Forecast%201.png) | ![Real Time Forecast 2](assets/Real%20Time%20Forecast%202.png) |
+|                                                                 |                                                                 |
+| :-------------------------------------------------------------: | :-------------------------------------------------------------: |
+| <img src="assets/Real%20Time%20Forecast%201.png" width="580" /> | <img src="assets/Real%20Time%20Forecast%202.png" width="580" /> |
 
 ### Exploratory Data Analysis
 
-|                         Exploratory Data Analysis 1                          |                         Exploratory Data Analysis 2                          |
-| :--------------------------------------------------------------------------: | :--------------------------------------------------------------------------: |
-| ![Exploratory Data Analysis 1](assets/Exploratory%20Data%20Analysis%201.png) | ![Exploratory Data Analysis 2](assets/Exploratory%20Data%20Analysis%202.png) |
+|                                                                        |                                                                        |
+| :--------------------------------------------------------------------: | :--------------------------------------------------------------------: |
+| <img src="assets/Exploratory%20Data%20Analysis%201.png" width="580" /> | <img src="assets/Exploratory%20Data%20Analysis%202.png" width="580" /> |
 
 ### Model Diagnostics & XAI
 
-|                          Model Diagnostics & XAI 1                           |                          Model Diagnostics & XAI 2                           |
-| :--------------------------------------------------------------------------: | :--------------------------------------------------------------------------: |
-| ![Model Diagnostics & XAI 1](assets/Model%20Diagnostics%20%26%20XAI%201.png) | ![Model Diagnostics & XAI 2](assets/Model%20Diagnostics%20%26%20XAI%202.png) |
+|                                                                          |                                                                          |
+| :----------------------------------------------------------------------: | :----------------------------------------------------------------------: |
+| <img src="assets/Model%20Diagnostics%20%26%20XAI%201.png" width="580" /> | <img src="assets/Model%20Diagnostics%20%26%20XAI%202.png" width="580" /> |
 
 ### Historical Overview
 
-|                     Historical Overview 1                      |                     Historical Overview 2                      |
+|                                                                |                                                                |
 | :------------------------------------------------------------: | :------------------------------------------------------------: |
-| ![Historical Overview 1](assets/Historical%20Overview%201.png) | ![Historical Overview 2](assets/Historical%20Overview%202.png) |
+| <img src="assets/Historical%20Overview%201.png" width="580" /> | <img src="assets/Historical%20Overview%202.png" width="580" /> |
 
 ## 🛠️ Tech Stack
 
