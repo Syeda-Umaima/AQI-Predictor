@@ -7,6 +7,11 @@ Professional end-to-end machine learning pipeline for real-time Air Quality Inde
 Explore the real-time dashboard and predictive analytics here:  
 **[AQI Predictor — Hyderabad Live Dashboard](https://aqi-predictor-hyd-sindh.streamlit.app/)**
 
+## 📄 Comprehensive Engineering Report
+
+Review the Detailed Report covering advanced feature engineering, multi-model evaluation, and cloud data architecture:
+**[Read the Report](./Internship%20Report.md)**
+
 ## 🚀 Project Overview
 
 The **AQI Predictor** is an enterprise-grade MLOps project that automates the entire lifecycle of a machine learning model—from data ingestion and feature engineering to model training, evaluation, and live deployment. The system is designed to be resilient, scalable, and highly transparent through Explainable AI (XAI).
